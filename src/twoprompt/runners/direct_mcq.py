@@ -3,38 +3,25 @@
 from typing import Any
 
 from twoprompt.pipeline.prompt_builder import build_direct_mcq_prompt
-from twoprompt.runners.base import ExperimentRunner
+from twoprompt.runners.local_base import LocalExperimentRunner
 
 
-class DirectMCQRunner(ExperimentRunner):
+class DirectMCQRunner(LocalExperimentRunner):
     """Runner for the direct MCQ baseline condition.
 
     Presents the model with a standard multiple-choice question and
-    expects a single letter response. One prompt, one API call per
-    question.
+    expects a single letter response. One backend call per question.
     """
 
-    async def run_one(self, question_row: Any, sample_index: int) -> dict:
-        """Execute one question through the direct MCQ baseline.
-
-        Args:
-            question_row: Normalized question record.
-            sample_index: Repetition index for this question within the run.
-
-        Returns:
-            Flat result dictionary containing trace, model output,
-            parse, and score fields.
-        """
+    def run_one(self, question_row: Any, sample_index: int) -> dict:
         prompt = self._build_prompt(question_row)
-        model_request = self._build_model_request(question_row, prompt, sample_index)
-        model_response = await self.client.generate(model_request)
+        generation_result, latency, error = self._call_backend(prompt)
 
         parsed_result = None
         score_result = None
-
-        if model_response.is_success():
+        if generation_result is not None:
             parsed_result, score_result = self._parse_and_score(
-                raw_text=model_response.raw_text,
+                raw_text=generation_result.raw_text,
                 correct_option=question_row["correct_option"],
                 options=self._build_options(question_row),
             )
@@ -42,21 +29,15 @@ class DirectMCQRunner(ExperimentRunner):
         return self._build_result_row(
             question_row=question_row,
             prompt=prompt,
-            model_request=model_request,
-            model_response=model_response,
+            sample_index=sample_index,
+            generation_result=generation_result,
+            latency_seconds=latency,
             parsed_result=parsed_result,
             score_result=score_result,
+            error=error,
         )
 
     def _build_prompt(self, question_row: Any) -> str:
-        """Build a direct multiple-choice prompt from a question row.
-
-        Args:
-            question_row: Normalized question record.
-
-        Returns:
-            Fully formatted direct MCQ prompt string.
-        """
         return build_direct_mcq_prompt(
             template=self._prompts["direct_mcq"],
             question=question_row["question_text"],
