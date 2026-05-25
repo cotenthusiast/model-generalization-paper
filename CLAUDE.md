@@ -244,6 +244,29 @@ Do not implement this inside the current codebase until the design is explicitly
 
 ---
 
+## Branch hygiene: runs, reports, cache
+
+`runs/`, `reports/`, `checkpoints/`, and `.cache/` are all git-ignored — they are **not stored in any branch** and cannot be recovered by switching branches. Each research direction should have its own isolated output directories.
+
+**Use git worktrees to keep branches isolated:**
+
+```bash
+# Check out a branch in a sibling directory so its outputs stay separate
+git worktree add ../two-prompt-research-main main
+```
+
+Each worktree has its own `runs/`, `reports/`, etc. on disk, so switching directions never mixes outputs.
+
+**If you need to wipe outputs before starting a new direction, archive first:**
+
+```bash
+tar -czf ~/two-prompt-backup-$(date +%Y%m%d).tar.gz runs/ reports/ checkpoints/ .cache/
+rm -rf runs/* reports/* checkpoints/* .cache/
+touch runs/.gitkeep
+```
+
+---
+
 ## Kelvin2 / HPC caution
 
 - Do not run heavy jobs on the login node — use SLURM batch jobs.
