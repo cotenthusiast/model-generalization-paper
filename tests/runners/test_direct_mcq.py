@@ -2,22 +2,20 @@
 
 from pathlib import Path
 
-import pytest
-
+from twoprompt.backends.dummy import DummyBackend
 from twoprompt.runners.direct_mcq import DirectMCQRunner
-from twoprompt.clients.types import ModelResponse, RequestMetadata
 from twoprompt.scoring.types import SCORE_CORRECT, SCORE_INCORRECT, SCORE_UNSCORABLE
 from twoprompt.parsing.types import PARSE_OK, PARSE_MISSING
 
-from tests.runners.conftest import MockClient, _make_success_response, _make_failure_response
+from tests.runners.conftest import ErrorBackend
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _PROMPTS_DIR = REPO_ROOT / "prompts"
 
 
-def _make_runner(client, method_name="baseline"):
+def _make_runner(backend, method_name="baseline"):
     return DirectMCQRunner(
-        client=client,
+        backend=backend,
         method_name=method_name,
         split_name="robustness",
         prompt_version="v1",
@@ -27,62 +25,51 @@ def _make_runner(client, method_name="baseline"):
 
 
 class TestDirectMCQRunnerRunOne:
-    """Tests for DirectMCQRunner.run_one execution flow."""
-
-    @pytest.mark.asyncio
-    async def test_correct_answer(self, runner_question_row, runner_metadata):
-        """Model returns the correct letter — should parse and score correct."""
-        response = _make_success_response("C", runner_metadata)
-        result = await _make_runner(MockClient(responses=[response])).run_one(
-            runner_question_row, sample_index=0
-        )
+    def test_correct_answer(self, runner_question_row):
+        """Backend returns 'C' — should parse and score correct."""
+        b = DummyBackend(fixed_text="C")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
 
         assert result["parsed_choice"] == "C"
         assert result["is_correct"] is True
         assert result["score_status"] == SCORE_CORRECT
         assert result["parse_status"] == PARSE_OK
 
-    @pytest.mark.asyncio
-    async def test_incorrect_answer(self, runner_question_row, runner_metadata):
-        """Model returns a wrong letter — should parse and score incorrect."""
-        response = _make_success_response("A", runner_metadata)
-        result = await _make_runner(MockClient(responses=[response])).run_one(
-            runner_question_row, sample_index=0
-        )
+    def test_incorrect_answer(self, runner_question_row):
+        """Backend returns 'A' — should parse and score incorrect."""
+        b = DummyBackend(fixed_text="A")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
 
         assert result["parsed_choice"] == "A"
         assert result["is_correct"] is False
         assert result["score_status"] == SCORE_INCORRECT
 
-    @pytest.mark.asyncio
-    async def test_failed_response(self, runner_question_row, runner_metadata):
-        """Model call fails — parsed and score fields should be None."""
-        response = _make_failure_response(runner_metadata)
-        result = await _make_runner(MockClient(responses=[response])).run_one(
-            runner_question_row, sample_index=0
-        )
+    def test_failed_backend_call(self, runner_question_row, error_backend):
+        """Backend raises — parsed and score fields should be None."""
+        result = _make_runner(error_backend).run_one(runner_question_row, sample_index=0)
 
         assert result["parsed_choice"] is None
         assert result["is_correct"] is None
         assert result["score_status"] is None
-        assert result["error_type"] == "ProviderTimeoutError"
+        assert result["model_status"] == "error"
+        assert result["error_type"] == "LocalInferenceError"
 
-    @pytest.mark.asyncio
-    async def test_unparseable_response(self, runner_question_row, runner_metadata):
-        """Model returns gibberish — should parse as missing, score unscorable."""
-        response = _make_success_response("I'm not sure about this question", runner_metadata)
-        result = await _make_runner(MockClient(responses=[response])).run_one(
-            runner_question_row, sample_index=0
-        )
+    def test_unparseable_response(self, runner_question_row):
+        """Backend returns gibberish — parse missing, score unscorable."""
+        b = DummyBackend(fixed_text="I'm not sure about this question")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
 
         assert result["parsed_choice"] is None
         assert result["score_status"] == SCORE_UNSCORABLE
 
-    @pytest.mark.asyncio
-    async def test_result_row_metadata(self, runner_question_row, runner_metadata):
+    def test_result_row_metadata(self, runner_question_row):
         """Result row should carry all trace metadata correctly."""
-        response = _make_success_response("C", runner_metadata)
-        result = await _make_runner(MockClient(responses=[response])).run_one(
+        b = DummyBackend(fixed_text="C")
+        b.load()
+        result = _make_runner(b, method_name="baseline").run_one(
             runner_question_row, sample_index=3
         )
 
@@ -90,19 +77,15 @@ class TestDirectMCQRunnerRunOne:
         assert result["method_name"] == "baseline"
         assert result["split_name"] == "robustness"
         assert result["subject"] == "computer_security"
-        assert result["provider"] == "openai"
-        assert result["model_name"] == "gpt-4.1-mini"
         assert result["sample_index"] == 3
+        assert result["provider"] == "dummy"
+        assert result["model_name"] == "dummy://"
 
-    @pytest.mark.asyncio
-    async def test_prompt_contains_question_and_options(
-            self, runner_question_row, runner_metadata
-    ):
-        """The prompt sent to the model should include the question and all options."""
-        response = _make_success_response("C", runner_metadata)
-        result = await _make_runner(MockClient(responses=[response])).run_one(
-            runner_question_row, sample_index=0
-        )
+    def test_prompt_contains_question_and_options(self, runner_question_row):
+        """The prompt should include the question and all options."""
+        b = DummyBackend(fixed_text="C")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
 
         assert "securely browse websites" in result["prompt"]
         assert "FTP" in result["prompt"]
@@ -110,24 +93,39 @@ class TestDirectMCQRunnerRunOne:
         assert "HTTPS" in result["prompt"]
         assert "SMTP" in result["prompt"]
 
-    @pytest.mark.asyncio
-    async def test_lowercase_answer_parsed(self, runner_question_row, runner_metadata):
-        """Model returns lowercase letter — should still parse correctly."""
-        response = _make_success_response("c", runner_metadata)
-        result = await _make_runner(MockClient(responses=[response])).run_one(
-            runner_question_row, sample_index=0
-        )
+    def test_lowercase_answer_parsed(self, runner_question_row):
+        """Backend returns lowercase letter — should still parse correctly."""
+        b = DummyBackend(fixed_text="c")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
 
         assert result["parsed_choice"] == "C"
         assert result["is_correct"] is True
 
+    def test_model_status_success(self, runner_question_row):
+        """Successful backend call sets model_status to 'success'."""
+        b = DummyBackend(fixed_text="C")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
+
+        assert result["model_status"] == "success"
+
+    def test_latency_seconds_present(self, runner_question_row):
+        """latency_seconds should be a non-negative float."""
+        b = DummyBackend(fixed_text="C")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
+
+        assert isinstance(result["latency_seconds"], float)
+        assert result["latency_seconds"] >= 0.0
+
 
 class TestDirectMCQRunnerBuildPrompt:
-    """Tests for DirectMCQRunner._build_prompt via a live runner."""
-
     def test_prompt_format(self, runner_question_row):
         """Prompt should be a non-empty string containing the question."""
-        runner = _make_runner(MockClient(responses=[]))
+        b = DummyBackend()
+        b.load()
+        runner = _make_runner(b)
         prompt = runner._build_prompt(runner_question_row)
 
         assert isinstance(prompt, str)
@@ -136,7 +134,9 @@ class TestDirectMCQRunnerBuildPrompt:
 
     def test_prompt_contains_all_options(self, runner_question_row):
         """Prompt should include all four option texts."""
-        runner = _make_runner(MockClient(responses=[]))
+        b = DummyBackend()
+        b.load()
+        runner = _make_runner(b)
         prompt = runner._build_prompt(runner_question_row)
 
         assert "FTP" in prompt

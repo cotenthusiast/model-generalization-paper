@@ -1,15 +1,14 @@
 # src/twoprompt/runners/pride.py
 
-"""PriDe runner (Zheng et al., ICLR 2024) — Together + first-token logits for A/B/C/D.
+"""PriDe runner (Zheng et al., ICLR 2024) — local backend, score_options() for logits.
 
 The position prior is estimated on a calibration set that is disjoint from
-the evaluation split.  All evaluation questions are scored with Eq.(8)
+the evaluation split. All evaluation questions are scored with Eq.(8)
 transfer debiasing; the Eq.(1) estimation-only path has been removed.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from pathlib import Path
@@ -17,10 +16,10 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from twoprompt.clients.types import ModelResponse, ProviderConfigurationError
+from twoprompt.backends.types import LocalGenerationConfig
 from twoprompt.parsing.types import PARSE_OK, ParseResult
 from twoprompt.pipeline.prompt_builder import build_direct_mcq_prompt
-from twoprompt.runners.base import ExperimentRunner
+from twoprompt.runners.local_base import LocalExperimentRunner
 from twoprompt.runners.permutation import PermutationRunner
 from twoprompt.runners.pride_debias import (
     OPTION_LETTERS,
@@ -31,7 +30,6 @@ from twoprompt.runners.pride_debias import (
     calibration_state_uniform,
     equation7_prior_from_rollouts,
     logprob_map_to_label_distribution,
-    merge_option_logprobs,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,25 +61,25 @@ def _pick_calibration_rows(
     return qids, rows
 
 
-class PriDeRunner(ExperimentRunner):
+class PriDeRunner(LocalExperimentRunner):
     """Cyclic permutation prior estimation (Paper §3) then Eq.(8) transfer inference.
 
     Calibration questions must be disjoint from evaluation questions so that
     the estimated prior is not contaminated by in-distribution label leakage.
     All evaluation rows use ``eq8_transfer`` mode.
+
+    Logprobs come from backend.score_options() rather than API logprob responses.
     """
 
     def __init__(
             self,
-            client: Any,
+            backend: Any,
             method_name: str,
             split_name: str,
             prompt_version: str,
             prompts_dir: Path,
             run_id: str,
-            temperature: float | None = None,
-            max_tokens: int | None = None,
-            seed: int | None = None,
+            generation_config: LocalGenerationConfig | None = None,
             perturbation_name: str | None = None,
             *,
             calibration_n: int = 50,
@@ -90,28 +88,16 @@ class PriDeRunner(ExperimentRunner):
             calibration_runs_dir: Path | None = None,
             calibration_questions: list[dict] | None = None,
     ) -> None:
-        kw: dict[str, Any] = dict(
-            client=client,
+        super().__init__(
+            backend=backend,
             method_name=method_name,
             split_name=split_name,
             prompt_version=prompt_version,
             prompts_dir=prompts_dir,
             run_id=run_id,
+            generation_config=generation_config,
+            perturbation_name=perturbation_name,
         )
-        if temperature is not None:
-            kw["temperature"] = temperature
-        if max_tokens is not None:
-            kw["max_tokens"] = max_tokens
-        if seed is not None:
-            kw["seed"] = seed
-        if perturbation_name is not None:
-            kw["perturbation_name"] = perturbation_name
-        super().__init__(**kw)
-
-        if client.provider != "together":
-            raise ProviderConfigurationError(
-                f"PriDe requires provider 'together' (logprobs); got {client.provider!r}"
-            )
 
         self._calibration_n = max(0, int(calibration_n))
         self._calibration_seed = int(calibration_seed)
@@ -123,19 +109,23 @@ class PriDeRunner(ExperimentRunner):
         self._calibration_state: CalibrationState = calibration_state_uniform()
 
     def _sidecar_path(self) -> Path:
-        slug = self.client.model_name.replace("/", "_").replace(" ", "_")
+        slug = (
+            self.backend.metadata.model_path
+            .replace("/", "_")
+            .replace(" ", "_")
+            .replace(":", "_")
+        )
         return (
             self._calibration_runs_dir
             / self.run_id
             / f"pride_calibration__{slug}__{self._calibration_benchmark}.json"
         )
 
-    async def run_many(self, question_rows: Sequence[Any]) -> list[dict]:
-        await self._ensure_calibration()
-        tasks = [self.run_one(row, i) for i, row in enumerate(question_rows)]
-        return list(await asyncio.gather(*tasks))
+    def run_many(self, question_rows: Sequence[Any]) -> list[dict]:
+        self._ensure_calibration()
+        return [self.run_one(row, i) for i, row in enumerate(question_rows)]
 
-    async def _ensure_calibration(self) -> None:
+    def _ensure_calibration(self) -> None:
         if self._calibration_ready:
             return
 
@@ -176,9 +166,7 @@ class PriDeRunner(ExperimentRunner):
             prior_vectors: list[np.ndarray] = []
             sample_index_hint = 0
             for row in cal_rows:
-                roll_mat, _ = await self._cyclic_rollout_prob_matrix(
-                    row, sample_index_hint
-                )
+                roll_mat = self._cyclic_rollout_prob_matrix(row, sample_index_hint)
                 sample_index_hint += len(OPTION_LETTERS)
                 prior_vectors.append(equation7_prior_from_rollouts(roll_mat))
 
@@ -209,12 +197,12 @@ class PriDeRunner(ExperimentRunner):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(sidecar_payload, indent=2))
 
-    async def _cyclic_rollout_prob_matrix(
+    def _cyclic_rollout_prob_matrix(
             self,
             question_row: Any,
             sample_index_base: int,
-    ) -> tuple[np.ndarray, ModelResponse | None]:
-        """Run all 4 cyclic permutations with logprobs → shape-(4,4) probability matrix."""
+    ) -> np.ndarray:
+        """Run score_options for 4 cyclic permutations → shape-(4,4) probability matrix."""
         canon = self._build_options(question_row)
         permutations = PermutationRunner._generate_permutations(canon)
         prompts = [
@@ -225,55 +213,51 @@ class PriDeRunner(ExperimentRunner):
             )
             for perm in permutations
         ]
-        reqs = [
-            self._build_model_request(
-                question_row,
-                prompt,
-                sample_index_base + k,
-                request_logprobs=True,
-            )
-            for k, prompt in enumerate(prompts)
-        ]
-        responses = list(
-            await asyncio.gather(*[self.client.generate(r) for r in reqs])
-        )
+
         rows: list[np.ndarray] = []
-        display: ModelResponse | None = None
         uni = np.ones(len(OPTION_LETTERS), dtype=np.float64) / len(OPTION_LETTERS)
-        for resp in responses:
-            if display is None and resp is not None and resp.is_success():
-                display = resp
-            if resp.is_success():
-                lp = merge_option_logprobs(resp.logprobs)
-                rows.append(logprob_map_to_label_distribution(lp) if lp else uni.copy())
-            else:
+        for prompt in prompts:
+            try:
+                score_result = self.backend.score_options(prompt, list(OPTION_LETTERS))
+                lp = score_result.scores
+                rows.append(
+                    logprob_map_to_label_distribution(lp) if lp else uni.copy()
+                )
+            except Exception:
                 rows.append(uni.copy())
 
-        return np.stack(rows, axis=0).astype(np.float64), display
+        return np.stack(rows, axis=0).astype(np.float64)
 
-    async def run_one(self, question_row: Any, sample_index: int) -> dict:
-        await self._ensure_calibration()
+    def run_one(self, question_row: Any, sample_index: int) -> dict:
+        self._ensure_calibration()
 
         options = self._build_options(question_row)
         prompt = self._build_prompt(question_row)
-        model_request = self._build_model_request(
-            question_row, prompt, sample_index, request_logprobs=True
-        )
-        model_response = await self.client.generate(model_request)
+        generation_result, latency, error = self._call_backend(prompt)
 
         parsed_result_raw = None
         score_raw = None
         score_adjusted = None
         adjusted_letter: str | None = None
+        lp_scores: dict[str, float] | None = None
 
-        if model_response.is_success():
+        if generation_result is not None:
             parsed_result_raw, score_raw = self._parse_and_score(
-                raw_text=model_response.raw_text,
+                raw_text=generation_result.raw_text,
                 correct_option=question_row["correct_option"],
                 options=options,
             )
-            lp = merge_option_logprobs(model_response.logprobs)
-            if not lp:
+            try:
+                score_result_obj = self.backend.score_options(prompt, list(OPTION_LETTERS))
+                lp_scores = score_result_obj.scores
+            except Exception as exc:
+                logger.warning(
+                    "PriDe: score_options failed for question %s — %s",
+                    question_row["question_id"],
+                    exc,
+                )
+
+            if not lp_scores:
                 logger.warning(
                     "PriDe: empty logprobs for question %s — skipping debiasing.",
                     question_row["question_id"],
@@ -281,13 +265,13 @@ class PriDeRunner(ExperimentRunner):
             else:
                 adjusted_letter = apply_debiased_choice_from_defaults(
                     self._calibration_state,
-                    lp,
+                    lp_scores,
                     eps_prob=1e-12,
                 )
                 adj_parse = ParseResult(
                     final_choice=adjusted_letter,
                     status=PARSE_OK,
-                    raw_text=model_response.raw_text,
+                    raw_text=generation_result.raw_text,
                     normalized_text=(
                         adjusted_letter
                         if parsed_result_raw is None
@@ -300,10 +284,12 @@ class PriDeRunner(ExperimentRunner):
         row = self._build_result_row(
             question_row=question_row,
             prompt=prompt,
-            model_request=model_request,
-            model_response=model_response,
+            sample_index=sample_index,
+            generation_result=generation_result,
+            latency_seconds=latency,
             parsed_result=parsed_result_raw,
             score_result=score_raw,
+            error=error,
         )
         row["pride_inference_mode"] = "eq8_transfer"
         row["pride_adjusted_choice"] = adjusted_letter
@@ -311,9 +297,7 @@ class PriDeRunner(ExperimentRunner):
         row["score_status_raw"] = score_raw.status if score_raw else None
         row["peprior_json"] = json.dumps(self._calibration_state.peprior_probs)
         row["option_logprob_json"] = (
-            json.dumps(merge_option_logprobs(model_response.logprobs))
-            if model_response.is_success()
-            else None
+            json.dumps(lp_scores) if lp_scores is not None else None
         )
         if score_adjusted is not None:
             row["score_status"] = score_adjusted.status

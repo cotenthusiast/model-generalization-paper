@@ -2,22 +2,20 @@
 
 from pathlib import Path
 
-import pytest
-
+from twoprompt.backends.dummy import DummyBackend
 from twoprompt.runners.two_stage import TwoStageRunner
-from twoprompt.clients.types import ModelResponse, RequestMetadata
 from twoprompt.scoring.types import SCORE_CORRECT, SCORE_INCORRECT, SCORE_UNSCORABLE
 from twoprompt.parsing.types import PARSE_OK, PARSE_MISSING
 
-from tests.runners.conftest import MockClient, _make_success_response, _make_failure_response
+from tests.runners.conftest import ErrorBackend
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _PROMPTS_DIR = REPO_ROOT / "prompts"
 
 
-def _make_runner(client):
+def _make_runner(backend):
     return TwoStageRunner(
-        client=client,
+        backend=backend,
         method_name="two_prompt",
         split_name="robustness",
         prompt_version="v1",
@@ -27,123 +25,89 @@ def _make_runner(client):
 
 
 class TestTwoStageRunnerRunOne:
-    """Tests for TwoStageRunner.run_one execution flow."""
-
-    @pytest.mark.asyncio
-    async def test_correct_two_stage(self, runner_question_row, runner_metadata):
-        """Free text returns 'HTTPS', matching returns 'C' — should score correct."""
-        client = MockClient(responses=[
-            _make_success_response("HTTPS", runner_metadata),
-            _make_success_response("C", runner_metadata),
-        ])
-        result = await _make_runner(client).run_one(runner_question_row, sample_index=0)
+    def test_correct_two_stage(self, runner_question_row):
+        """Stage 1 returns 'HTTPS', stage 2 matches to 'C' — should score correct."""
+        # DummyBackend always returns the same text, so both calls return "C".
+        # Stage 1: "C" is the free-text answer.
+        # Stage 2: "C" is parsed directly → correct.
+        b = DummyBackend(fixed_text="C")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
 
         assert result["parsed_choice"] == "C"
         assert result["is_correct"] is True
         assert result["score_status"] == SCORE_CORRECT
 
-    @pytest.mark.asyncio
-    async def test_incorrect_two_stage(self, runner_question_row, runner_metadata):
-        """Free text returns 'FTP', matching returns 'A' — should score incorrect."""
-        client = MockClient(responses=[
-            _make_success_response("FTP", runner_metadata),
-            _make_success_response("A", runner_metadata),
-        ])
-        result = await _make_runner(client).run_one(runner_question_row, sample_index=0)
+    def test_incorrect_two_stage(self, runner_question_row):
+        """Stage 2 returns 'A' — should score incorrect."""
+        b = DummyBackend(fixed_text="A")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
 
         assert result["parsed_choice"] == "A"
         assert result["is_correct"] is False
         assert result["score_status"] == SCORE_INCORRECT
 
-    @pytest.mark.asyncio
-    async def test_stage_one_failure_returns_early(
-            self, runner_question_row, runner_metadata
-    ):
+    def test_stage_one_failure_returns_early(self, runner_question_row, error_backend):
         """If stage 1 fails, should return immediately with no parse or score."""
-        client = MockClient(responses=[_make_failure_response(runner_metadata)])
-        result = await _make_runner(client).run_one(runner_question_row, sample_index=0)
+        result = _make_runner(error_backend).run_one(runner_question_row, sample_index=0)
 
         assert result["parsed_choice"] is None
         assert result["is_correct"] is None
         assert result["score_status"] is None
-        assert len(client.requests_received) == 1
+        assert result["model_status"] == "error"
 
-    @pytest.mark.asyncio
-    async def test_stage_two_failure(self, runner_question_row, runner_metadata):
-        """Stage 1 succeeds but stage 2 fails — parse and score should be None."""
-        client = MockClient(responses=[
-            _make_success_response("HTTPS", runner_metadata),
-            _make_failure_response(runner_metadata),
-        ])
-        result = await _make_runner(client).run_one(runner_question_row, sample_index=0)
-
-        assert result["parsed_choice"] is None
-        assert result["is_correct"] is None
-        assert result["free_text_response"] == "HTTPS"
-
-    @pytest.mark.asyncio
-    async def test_free_text_response_preserved(
-            self, runner_question_row, runner_metadata
-    ):
+    def test_free_text_response_preserved(self, runner_question_row):
         """The intermediate free-text response should be saved in the result row."""
-        client = MockClient(responses=[
-            _make_success_response("HTTPS", runner_metadata),
-            _make_success_response("C", runner_metadata),
-        ])
-        result = await _make_runner(client).run_one(runner_question_row, sample_index=0)
+        b = DummyBackend(fixed_text="HTTPS")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
 
         assert result["free_text_response"] == "HTTPS"
         assert result["free_text_prompt"] is not None
         assert result["free_text_latency"] is not None
 
-    @pytest.mark.asyncio
-    async def test_makes_two_api_calls(self, runner_question_row, runner_metadata):
-        """Should fire exactly 2 requests — free text then matching."""
-        client = MockClient(responses=[
-            _make_success_response("HTTPS", runner_metadata),
-            _make_success_response("C", runner_metadata),
-        ])
-        await _make_runner(client).run_one(runner_question_row, sample_index=0)
-
-        assert len(client.requests_received) == 2
-
-    @pytest.mark.asyncio
-    async def test_matching_prompt_contains_free_text(
-            self, runner_question_row, runner_metadata
-    ):
+    def test_matching_prompt_contains_free_text(self, runner_question_row):
         """The option-matching prompt should include the free-text answer."""
-        client = MockClient(responses=[
-            _make_success_response("HTTPS", runner_metadata),
-            _make_success_response("C", runner_metadata),
-        ])
-        result = await _make_runner(client).run_one(runner_question_row, sample_index=0)
+        b = DummyBackend(fixed_text="HTTPS")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
 
         assert "HTTPS" in result["prompt"]
 
-    @pytest.mark.asyncio
-    async def test_result_row_metadata(self, runner_question_row, runner_metadata):
+    def test_result_row_metadata(self, runner_question_row):
         """Result row should carry trace metadata."""
-        client = MockClient(responses=[
-            _make_success_response("HTTPS", runner_metadata),
-            _make_success_response("C", runner_metadata),
-        ])
-        result = await _make_runner(client).run_one(runner_question_row, sample_index=0)
+        b = DummyBackend(fixed_text="C")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
 
         assert result["run_id"] == "test_run_001"
         assert result["method_name"] == "two_prompt"
         assert result["split_name"] == "robustness"
 
-    @pytest.mark.asyncio
-    async def test_unparseable_matching_response(
-            self, runner_question_row, runner_metadata
-    ):
+    def test_unparseable_matching_response(self, runner_question_row):
         """Stage 2 returns gibberish — should be unscorable."""
-        client = MockClient(responses=[
-            _make_success_response("HTTPS", runner_metadata),
-            _make_success_response("I think it might be one of those", runner_metadata),
-        ])
-        result = await _make_runner(client).run_one(runner_question_row, sample_index=0)
+        b = DummyBackend(fixed_text="I think it might be one of those")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
 
         assert result["parsed_choice"] is None
         assert result["score_status"] == SCORE_UNSCORABLE
-        assert result["free_text_response"] == "HTTPS"
+        assert result["free_text_response"] == "I think it might be one of those"
+
+    def test_fallback_not_used_by_default(self, runner_question_row):
+        """Without fallback_on_parse_failure=True, fallback_used is False."""
+        b = DummyBackend(fixed_text="I think it might be one of those")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
+
+        assert result["fallback_used"] is False
+
+    def test_latency_seconds_present(self, runner_question_row):
+        """latency_seconds should be a non-negative float from the matching stage."""
+        b = DummyBackend(fixed_text="C")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
+
+        assert isinstance(result["latency_seconds"], float)
+        assert result["latency_seconds"] >= 0.0

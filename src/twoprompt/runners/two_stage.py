@@ -7,10 +7,10 @@ from twoprompt.pipeline.prompt_builder import (
     build_free_text_prompt,
     build_option_matching_prompt,
 )
-from twoprompt.runners.base import ExperimentRunner
+from twoprompt.runners.local_base import LocalExperimentRunner
 
 
-class TwoStageRunner(ExperimentRunner):
+class TwoStageRunner(LocalExperimentRunner):
     """Runner for the two-stage prompting condition.
 
     Stage one elicits a free-text answer without exposing options.
@@ -26,40 +26,30 @@ class TwoStageRunner(ExperimentRunner):
         super().__init__(*args, **kwargs)
         self._fallback_on_parse_failure = fallback_on_parse_failure
 
-    async def run_one(self, question_row: Any, sample_index: int) -> dict:
-        """Execute one question through the two-stage pipeline.
-
-        Args:
-            question_row: Normalized question record.
-            sample_index: Repetition index for this question within the run.
-
-        Returns:
-            Flat result dictionary containing trace, model output,
-            parse, and score fields, plus the intermediate free-text
-            response.
-        """
+    def run_one(self, question_row: Any, sample_index: int) -> dict:
         # Stage 1: free-text response
         free_text_prompt = build_free_text_prompt(
             template=self._prompts["free_text"],
             question=question_row["question_text"],
         )
-        free_text_request = self._build_model_request(
-            question_row, free_text_prompt, sample_index,
+        free_text_result, free_text_latency, free_text_error = self._call_backend(
+            free_text_prompt
         )
-        free_text_response = await self.client.generate(free_text_request)
 
         # If stage 1 fails, return early
-        if not free_text_response.is_success():
+        if free_text_result is None:
             return self._build_result_row(
                 question_row=question_row,
                 prompt=free_text_prompt,
-                model_request=free_text_request,
-                model_response=free_text_response,
+                sample_index=sample_index,
+                generation_result=None,
+                latency_seconds=free_text_latency,
                 parsed_result=None,
                 score_result=None,
+                error=free_text_error,
             )
 
-        free_text_answer = free_text_response.raw_text
+        free_text_answer = free_text_result.raw_text
 
         # Stage 2: option matching using the free-text answer
         matching_prompt = build_option_matching_prompt(
@@ -71,29 +61,23 @@ class TwoStageRunner(ExperimentRunner):
             option_c=question_row["choice_c"],
             option_d=question_row["choice_d"],
         )
-        matching_request = self._build_model_request(
-            question_row, matching_prompt, sample_index,
+        matching_result, matching_latency, matching_error = self._call_backend(
+            matching_prompt
         )
-        matching_response = await self.client.generate(matching_request)
 
-        # Parse and score the stage 2 response
         parsed_result = None
         score_result = None
-
-        if matching_response.is_success():
+        if matching_result is not None:
             parsed_result, score_result = self._parse_and_score(
-                raw_text=matching_response.raw_text,
+                raw_text=matching_result.raw_text,
                 correct_option=question_row["correct_option"],
                 options=self._build_options(question_row),
             )
 
-        # Fallback: if matching was unparseable, re-issue the direct MCQ prompt.
-        # Goes through the normal client path — hits cache if baseline already ran,
-        # makes a live API call otherwise.
         fallback_used = False
         if (
             self._fallback_on_parse_failure
-            and matching_response.is_success()
+            and matching_result is not None
             and (parsed_result is None or parsed_result.final_choice is None)
         ):
             fallback_prompt = build_direct_mcq_prompt(
@@ -104,13 +88,10 @@ class TwoStageRunner(ExperimentRunner):
                 option_c=question_row["choice_c"],
                 option_d=question_row["choice_d"],
             )
-            fallback_request = self._build_model_request(
-                question_row, fallback_prompt, sample_index
-            )
-            fallback_response = await self.client.generate(fallback_request)
-            if fallback_response.is_success():
+            fallback_result, _, _ = self._call_backend(fallback_prompt)
+            if fallback_result is not None:
                 parsed_result, score_result = self._parse_and_score(
-                    raw_text=fallback_response.raw_text,
+                    raw_text=fallback_result.raw_text,
                     correct_option=question_row["correct_option"],
                     options=self._build_options(question_row),
                 )
@@ -119,16 +100,17 @@ class TwoStageRunner(ExperimentRunner):
         result = self._build_result_row(
             question_row=question_row,
             prompt=matching_prompt,
-            model_request=matching_request,
-            model_response=matching_response,
+            sample_index=sample_index,
+            generation_result=matching_result,
+            latency_seconds=matching_latency,
             parsed_result=parsed_result,
             score_result=score_result,
+            error=matching_error,
         )
 
-        # Preserve the intermediate free-text response for answer matching
         result["free_text_prompt"] = free_text_prompt
         result["free_text_response"] = free_text_answer
-        result["free_text_latency"] = free_text_response.latency_seconds
+        result["free_text_latency"] = free_text_latency
         result["fallback_used"] = fallback_used
 
         return result
