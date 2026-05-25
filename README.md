@@ -1,154 +1,157 @@
-# Two-Stage Prompting Does Not Mitigate MCQ Positional Bias in LLMs
+# MCQ Bias-Mitigation Scale-Generalisation
 
-This repository contains the full code and experiment pipeline for a benchmarking study on multiple-choice selection bias in large language models.
+This repository contains the code and experiment pipeline for a study on whether MCQ positional-bias mitigation methods generalise reliably across open-source model families and scales.
 
-**Short version:** the hypothesis was wrong. Two-stage prompting (separating free-text answer generation from final option selection) does not reliably mitigate positional bias in MCQ evaluation, and in most settings makes accuracy and bias worse. Cyclic permutation remains the stronger robustness intervention. PriDe provides a modest gain on the one model that supports it.
+**Research question:** Do MCQ bias-mitigation methods remain reliable when tested across different open-source model sizes and families?
+
+This work extends the findings of the two-stage prompting study (see `main` branch), which showed that naive prompting interventions fail to reduce MCQ positional bias and reduce end-to-end accuracy. The current direction asks whether any existing method is stable across a model hierarchy, or whether apparent gains are artefacts of testing on a narrow set of models.
 
 ---
 
-## Research Question
+## Motivation
 
-Can multiple-choice selection bias be reduced at the prompting stage by separating answer generation from option selection?
+Most MCQ bias-mitigation papers evaluate on one or two models and claim general results. This study tests the same set of methods across a controlled scale ladder within two model families (Qwen and Llama), using the same benchmarks and metrics as the prior work. A method that improves results on a 7B model but fails on a 32B or 70B model is not strong evidence of general mitigation.
 
-The motivating intuition is straightforward: if option labels distort model behavior, then reasoning should happen *before* labels are introduced. This project tests that idea in a controlled benchmark across four models and two benchmarks, and finds it insufficient.
+---
 
-## Experiment Design
+## Methods Under Evaluation
 
-Four conditions are compared across 1,000 stratified questions per benchmark:
+| Key | Description | Logprobs required |
+|---|---|---|
+| `baseline` | Direct MCQ, single prompt | No |
+| `cyclic` | Four cyclic option rotations, majority vote | No |
+| `two_prompt` | Free-text answer then option matching | No |
+| `pride` | Logprob-based positional prior debiasing (Zheng et al., ICLR 2024) | Yes |
 
-| Condition | Description |
+Additional methods (answer-level calibration, additional-option prompting, text-answer extraction) are candidates for a second pass after the core comparison works.
+
+---
+
+## Models
+
+Local inference via HuggingFace `transformers` on Kelvin2 HPC (NVIDIA A100 / V100 nodes).
+
+| Family | Sizes |
 |---|---|
-| **Baseline** | Direct MCQ answering, single prompt |
-| **Two-Stage** | Free-text answer generation, then option matching |
-| **Cyclic** | Four cyclic rotations of answer options; majority vote |
-| **PriDe** | Logprob-based positional prior debiasing (Zheng et al., ICLR 2024) |
+| Qwen 2.5 Instruct | 7B, 32B, 72B |
+| Llama 3.1 Instruct | 8B, 70B |
 
-PriDe requires first-token logprobabilities and runs on Together AI only (Qwen model).
+Exact model list is subject to Kelvin2 memory and queue constraints. 405B is not feasible on available hardware.
 
-**Benchmarks:** MMLU and ARC-Challenge (robustness split, 1,000 questions each)
+---
 
-**Models:**
+## Benchmarks
 
-| Model | Provider |
-|---|---|
-| GPT-4.1-mini | OpenAI |
-| Gemini 2.5 Flash | Google |
-| Llama 3.1 8B Instant | Groq |
-| Qwen 2.5 7B Turbo | Together AI |
+MMLU and ARC-Challenge, reusing the same 1,000-question robustness splits from the two-stage study to allow direct comparison.
 
-This is a robustness study, not a capability benchmark. The primary metric is end-to-end accuracy (correct / total), which includes failures from unscorable outputs and provider errors. Conditional accuracy (correct / scored) is reported as a secondary metric. Positional bias is quantified as mean absolute deviation from the ground-truth answer-position distribution.
+---
 
-## Main Findings
+## Metrics
 
-**Two-stage prompting hurts accuracy and increases bias across the board.** On MMLU, average E2E accuracy drops 2.4pp relative to baseline; on ARC-Challenge, 3.7pp. Mean absolute deviation from the ground-truth option distribution increases under two-stage across all models. Gemini 2.5 Flash shows the largest effect, partly driven by parse failures on the option-matching stage.
+- **End-to-end accuracy** (`correct / total`) — headline metric, includes unscorable outputs in denominator
+- **Conditional accuracy** (`correct / scored`) — supplementary
+- **MAD** — mean absolute deviation from ground-truth answer-position distribution, primary bias metric
+- **Parse / fallback rate** — proportion of unscorable outputs per method
+- **Compute cost** — number of model calls per question per method
 
-**Cyclic permutation is the strongest robustness method.** Average accuracy is at or above baseline on both benchmarks (+1.0pp MMLU, +0.6pp ARC), and positional bias is consistently lower than baseline (0.34pp MAD on ARC vs. 0.44pp baseline).
-
-**PriDe provides a consistent but modest gain on Qwen.** +1.1pp on MMLU, +0.3pp on ARC, with lower bias than baseline on ARC. Given it requires logprob access unavailable on most closed-source APIs, the practical tradeoff is narrow.
-
-**Unscorable burden is not a footnote.** Conditional accuracy (correct / scored) can remain high while end-to-end performance collapses. Any evaluation that reports only conditional accuracy will overstate the practical usefulness of two-stage methods.
+---
 
 ## Repository Structure
 
 ```
-two-prompt-research/
-├── config/
-│   └── default.yaml          # job matrix, model configs, rate limits
-├── data/                     # benchmark data, normalized CSVs, stratified splits
-├── runs/                     # raw per-job CSVs (gitignored)
-├── scripts/
-│   ├── run_experiment.py     # overnight runner
-│   ├── evaluate_run.py       # accuracy, bias, overlap, per-subject stats
-│   ├── aggregate_results.py  # paper-ready tables (text + LaTeX)
-│   ├── generate_figures.py   # paper-ready matplotlib figures
-│   └── prepare_data.py       # one-time data preprocessing
-├── src/twoprompt/
-│   ├── clients/              # async provider clients (OpenAI, Gemini, Groq, Together)
-│   ├── runners/              # condition runners (baseline, two-stage, cyclic, PriDe)
-│   ├── infra/                # disk cache, checkpointing
-│   ├── benchmarks/           # benchmark loaders (MMLU, ARC-Challenge)
-│   ├── parsing/              # answer parser
-│   ├── scoring/              # scorer
-│   └── pipeline/             # prompt builder
-├── prompts/v1/               # prompt templates
-└── tests/                    # test suite
+config/
+  default.yaml              job matrix, model configs, rate limits
+
+data/                       benchmark data, normalised CSVs, stratified splits
+
+scripts/
+  run_experiment.py         overnight runner
+  evaluate_run.py           accuracy, bias, overlap, per-subject stats
+  aggregate_results.py      paper-ready tables
+  prepare_data.py           one-time data preprocessing
+
+archive/scripts/            scripts retained for reference only
+  generate_figures.py       figure generation from prior study
+  smoke_clients.py          one-off API connectivity check
+
+src/twoprompt/
+  backends/                 local HuggingFace inference backends (Qwen, Llama, Dummy)
+  clients/                  async cloud API clients (OpenAI, Gemini, Groq, Together)
+  runners/                  method runners (baseline, cyclic, two-stage, PriDe)
+  infra/                    disk cache, checkpointing
+  benchmarks/               benchmark loaders (MMLU, ARC-Challenge)
+  parsing/                  answer parser
+  scoring/                  scorer
+  pipeline/                 prompt builder
+
+prompts/v1/                 prompt templates
+tests/                      test suite
 ```
 
-`reports/` and `checkpoints/` are gitignored and generated locally by the pipeline.
+`runs/`, `reports/`, `checkpoints/`, and `.cache/` are gitignored and generated locally.
+
+---
 
 ## Setup
 
 ```bash
+# Core dependencies
 pip install -e ".[dev]"
-cp .env.example .env          # fill in API keys
+
+# Local model inference (required for HPC experiments)
+pip install -e ".[local]"
+
+cp .env.example .env       # fill in API keys if using cloud models
 ```
 
-Required keys in `.env`: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `TOGETHER_API_KEY`
+For local model inference, `torch`, `transformers`, and `accelerate` are installed via the `local` extra. Cloud API keys (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `TOGETHER_API_KEY`) are only required for cloud-backed runs.
 
-## Configuration
+---
 
-All run settings live in `config/default.yaml`. Edit that file to change models, methods, benchmarks, rate limits, or checkpoint frequency. The modules under `src/twoprompt/config/` are kept for backward compatibility and should not be edited for run configuration.
-
-## Running the Pipeline
+## Running Experiments
 
 ```bash
-# Dry run: cost and time estimate, no API calls
+# Dry run — cost and time estimate, no model calls
 python scripts/run_experiment.py --dry-run
 
 # Full run (prompts for confirmation)
 python scripts/run_experiment.py
 
-# Skip confirmation
-python scripts/run_experiment.py --yes
-
-# Resume a previous run (skips completed jobs via checkpointing)
+# Resume a previous run
 python scripts/run_experiment.py --run-id <RUN_ID> --yes
 ```
 
-## Evaluation and Reporting
+## Evaluation
 
 ```bash
-# Evaluate one benchmark — writes CSVs to reports/<RUN_ID>/<benchmark>/
-python scripts/evaluate_run.py <RUN_ID> --benchmark mmlu --apply-fallback
-python scripts/evaluate_run.py <RUN_ID> --benchmark arc --apply-fallback
-
-# Aggregate into paper tables (text + LaTeX)
-python scripts/aggregate_results.py <RUN_ID> --benchmark mmlu
-python scripts/aggregate_results.py <RUN_ID> --benchmark arc_challenge
-
-# Cross-benchmark comparison table
-python scripts/aggregate_results.py <RUN_ID> --cross-benchmark
-
-# Generate paper figures (PDF + PNG)
-python scripts/generate_figures.py <RUN_ID> --benchmark mmlu
-python scripts/generate_figures.py <RUN_ID> --benchmark arc_challenge
+python scripts/evaluate_run.py <RUN_ID> --benchmark mmlu
+python scripts/evaluate_run.py <RUN_ID> --benchmark arc
+python scripts/aggregate_results.py
 ```
 
-`--apply-fallback` substitutes baseline results for unscorable two-stage rows at eval time, without modifying the raw run CSVs.
+Reports written to `reports/<RUN_ID>/<benchmark>/`.
 
-Paper outputs are written to `reports/<RUN_ID>/<benchmark>/paper/`.
+---
 
-## Metrics
+## HPC Notes
 
-**End-to-end accuracy** (`correct / total`) is the headline metric. It includes provider failures and unscorable outputs in the denominator.
+Experiments run on Kelvin2 (Queen's University Belfast) via SLURM batch jobs. Python code has no SLURM dependency — SLURM scripts live separately in `jobs/` (not yet committed) and invoke the same `scripts/run_experiment.py` entry point. See CLAUDE.md for Kelvin2 guidance.
 
-**Conditional accuracy** (`correct / scored`) is supplementary.
+---
 
-**Mean absolute deviation** from the ground-truth answer-position distribution is the primary bias metric, reported with 95% bootstrap confidence intervals (10,000 resamples).
+## Prior Work
 
-Additional outputs: question-level overlap vs. baseline, choice shift analysis (broken/fixed per method), per-subject accuracy, and two-stage method metrics (free-text availability, latency).
+The `main` branch contains the two-stage prompting study:
+*Two-Stage Prompting Does Not Mitigate MCQ Positional Bias in LLMs*
+Karl Hanna, 2026
+
+The current branch (`model-generalization`) extends that infrastructure to local open-source models and a scale-generalisation design.
+
+---
 
 ## AI Usage Disclosure
 
-The research question, hypothesis, experiment design, evaluation framing, and interpretation of results are my own. The core implementation was written primarily by me.
-
-Infrastructure (checkpointing, response caching, retry/backoff, rate-limit settings, YAML config, overnight orchestrator) and evaluation/reporting scripts were written with substantial AI assistance under my direction and reviewed manually. The test suite used AI assistance for fixtures and scaffolding. Metric definitions and any logic that directly affects paper claims were reviewed and corrected manually.
-
-AI tools were used for wording support during paper drafting. Design decisions and conclusions are my own.
-
-## Why a Negative Result
-
-Negative results in evaluation methodology are undersupplied. The intuition behind two-stage prompting is reasonable enough that it is worth documenting why it fails under a stricter robustness evaluation, particularly the unscorable burden problem, which is easy to miss if conditional accuracy is the only reported metric.
+The research question, experiment design, and interpretation of results are my own. Infrastructure code (backends, checkpointing, caching, retry logic, orchestration) and test scaffolding were written with substantial AI assistance under my direction and reviewed manually. Logic that directly affects paper claims was reviewed and verified manually.
 
 ---
 
