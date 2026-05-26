@@ -10,12 +10,14 @@ TWOPROMPT_METHOD = "two_prompt"
 CYCLIC_METHOD = "cyclic"
 TWOPROMPT_CYCLIC_METHOD = "two_prompt_cyclic"
 PRIDE_METHOD = "pride"
+ADDITIONAL_OPTION_METHOD = "additional_option"
 
 ALL_METHODS = [
     BASELINE_METHOD,
     TWOPROMPT_METHOD,
     CYCLIC_METHOD,
     PRIDE_METHOD,
+    ADDITIONAL_OPTION_METHOD,
 ]
 
 # Track A: robustness / accuracy ------------------------

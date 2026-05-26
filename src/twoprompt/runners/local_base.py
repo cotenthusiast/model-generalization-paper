@@ -49,8 +49,16 @@ class LocalExperimentRunner(ABC):
     def run_one(self, question_row: Any, sample_index: int) -> dict:
         """Execute a single question through this experimental condition."""
 
+    def setup(self, question_rows: Sequence[Any]) -> None:
+        """Optional pre-run setup hook called once before run_many iterates.
+
+        Override in runners that need a calibration or initialisation phase.
+        The default is a no-op.
+        """
+
     def run_many(self, question_rows: Sequence[Any]) -> list[dict]:
         """Execute multiple questions sequentially."""
+        self.setup(question_rows)
         return [self.run_one(row, i) for i, row in enumerate(question_rows)]
 
     def _call_backend(
