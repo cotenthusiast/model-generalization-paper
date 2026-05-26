@@ -83,10 +83,7 @@ class TwoStageRunner(LocalExperimentRunner):
             fallback_prompt = build_direct_mcq_prompt(
                 template=self._prompts["direct_mcq"],
                 question=question_row["question_text"],
-                option_a=question_row["choice_a"],
-                option_b=question_row["choice_b"],
-                option_c=question_row["choice_c"],
-                option_d=question_row["choice_d"],
+                options=list(self._build_options(question_row).values()),
             )
             fallback_result, _, _ = self._call_backend(fallback_prompt)
             if fallback_result is not None:
