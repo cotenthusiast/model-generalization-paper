@@ -31,6 +31,7 @@ from twoprompt.infra.cache import CachingClientWrapper, ResponseCache
 from twoprompt.infra.checkpoint import CheckpointManager
 from twoprompt.io.readers import read_normalized_questions, read_split_ids
 from twoprompt.io.writers import write_run_results
+from twoprompt.runners.additional_option import AdditionalOptionRunner
 from twoprompt.runners.direct_mcq import DirectMCQRunner
 from twoprompt.runners.permutation import PermutationRunner
 from twoprompt.runners.pride import PriDeRunner
@@ -55,6 +56,7 @@ _METHOD_TO_RUNNER = {
     "two_prompt": TwoStageRunner,
     "cyclic": PermutationRunner,
     "pride": PriDeRunner,
+    "additional_option": AdditionalOptionRunner,
 }
 
 # API calls per question for each method (used for preflight estimates).
@@ -64,6 +66,7 @@ _CALLS_PER_QUESTION = {
     "two_prompt": 2,       # stage 1 free-text + stage 2 matching
     "cyclic": 4,           # 4 cyclic permutations
     "pride": 1,
+    "additional_option": 1,
 }
 
 # Approximate avg tokens per API call (very rough; for cost estimates only).

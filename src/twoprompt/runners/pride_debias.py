@@ -23,7 +23,6 @@ import numpy as np
 
 OPTION_LETTERS: tuple[str, ...] = ("A", "B", "C", "D")
 
-
 def _normalize_option_letter(token: str | None) -> str | None:
     if token is None:
         return None
