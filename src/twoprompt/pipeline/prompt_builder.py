@@ -50,31 +50,23 @@ def load_prompt_templates(version: str, prompts_dir: Path) -> dict[str, str]:
 def build_direct_mcq_prompt(
     template: str,
     question: str,
-    option_a: str,
-    option_b: str,
-    option_c: str,
-    option_d: str,
+    options: list[str],
 ) -> str:
     """Format the direct MCQ template with question and option text.
 
     Args:
         template: Raw template string from load_prompt_templates.
         question: Question stem to present to the model.
-        option_a: Text of answer option A.
-        option_b: Text of answer option B.
-        option_c: Text of answer option C.
-        option_d: Text of answer option D.
+        options: Option texts in order; labels A, B, C, ... are assigned by position.
 
     Returns:
         Fully formatted prompt string.
     """
-    return template.format(
-        question=question,
-        option_a=option_a,
-        option_b=option_b,
-        option_c=option_c,
-        option_d=option_d,
+    labels = "ABCDEFGHIJ"
+    options_block = "\n".join(
+        f"{labels[i]}. {text}" for i, text in enumerate(options)
     )
+    return template.format(question=question, options=options_block)
 
 
 def build_free_text_prompt(template: str, question: str) -> str:
