@@ -1,63 +1,33 @@
-# Two-prompt research — runtime configuration
+# Two-prompt research — runtime configuration (local model / HPC)
 #
-# Edit this file to change what gets run, tune per-model rate-limit settings,
-# or add new models. The Python modules in src/twoprompt/config/ are kept for
-# backward compatibility with evaluation and analysis scripts and should not
-# be edited for run configuration.
+# Edit this file to change what gets run or add new models.
+# The Python modules in src/twoprompt/config/ should not be edited
+# for run configuration.
 
 # ---------------------------------------------------------------------------
 # Model definitions
 # ---------------------------------------------------------------------------
-# Each key is the exact model name passed to the API.
+# Each key is the model name that appears in run CSVs and evaluation reports.
+# It must match MODEL_ORDER in evaluate_run.py and aggregate_results.py exactly.
+#
 # Fields:
-#   provider          - "openai" | "gemini" | "groq"
-#   concurrency       - max in-flight requests for this model at once
-#   min_delay_seconds - minimum gap between consecutive calls (proactive spacing)
-#   max_retries       - retry attempts on transient errors (429, timeout, etc.)
-#   timeout           - per-call timeout in seconds
-#   pricing           - USD per 1M tokens; used only for preflight estimates.
-#                       Set both to 0 to skip cost estimates for this model.
+#   model_path  - HuggingFace hub ID or absolute path to local weights
+#   family      - "qwen" | "llama" (used for backend selection)
+#   size_label  - informational only, e.g. "7B"
+#   device      - "auto" (recommended for multi-GPU), "cuda", or "cpu"
 
 models:
-  gpt-4.1-mini:
-    provider: openai
-    concurrency: 10
-    min_delay_seconds: 0.0
-    max_retries: 3
-    timeout: 30
-    pricing:
-      input_per_1m: 0.40
-      output_per_1m: 1.60
+  Qwen/Qwen2.5-7B-Instruct:
+    model_path: Qwen/Qwen2.5-7B-Instruct
+    family: qwen
+    size_label: 7B
+    device: auto
 
-  gemini-2.5-flash:
-    provider: gemini
-    concurrency: 1
-    min_delay_seconds: 1.5
-    max_retries: 5
-    timeout: 30
-    pricing:
-      input_per_1m: 0.15
-      output_per_1m: 0.60
-
-  llama-3.1-8b-instant:
-    provider: groq
-    concurrency: 2
-    min_delay_seconds: 0.5
-    max_retries: 3
-    timeout: 30
-    pricing:
-      input_per_1m: 0.0
-      output_per_1m: 0.0
-
-  Qwen/Qwen2.5-7B-Instruct-Turbo:
-    provider: together
-    concurrency: 5
-    min_delay_seconds: 0.2
-    max_retries: 3
-    timeout: 60
-    pricing:
-      input_per_1m: 0.20
-      output_per_1m: 0.20
+  meta-llama/Llama-3.1-8B-Instruct:
+    model_path: meta-llama/Llama-3.1-8B-Instruct
+    family: llama
+    size_label: 8B
+    device: auto
 
 # ---------------------------------------------------------------------------
 # Run settings
@@ -71,53 +41,32 @@ run:
   # Save progress to a checkpoint file every N completed questions per job.
   checkpoint_every_n: 50
 
-  # Cache responses to disk. Identical (model, prompt, temperature, …) calls
-  # return the cached response without hitting the API. Disable with --no-cache.
-  cache_enabled: true
-
-  # PriDe (Together + logprobs). Add `pride` to methods on Qwen jobs only.
+  # PriDe calibration settings.
   pride_calibration_n: 50
   pride_calibration_seed: 42
 
   fallback_on_parse_failure: false
 
   # Job matrix: each entry is one (model × methods × benchmark × split) run.
-  # To add a new benchmark or model, append a job here and add the model
-  # definition under `models` above.
+  # To add a new model, add it under `models` above and append jobs here.
   jobs:
-    - model: gpt-4.1-mini
-      methods: [baseline, two_prompt, cyclic]
+    - model: Qwen/Qwen2.5-7B-Instruct
+      methods: [baseline, two_prompt, cyclic, pride, calibration]
       benchmark: mmlu
       split: robustness
-    - model: gemini-2.5-flash
-      methods: [baseline, two_prompt, cyclic]
+    - model: meta-llama/Llama-3.1-8B-Instruct
+      methods: [baseline, two_prompt, cyclic, calibration]
       benchmark: mmlu
       split: robustness
-    - model: llama-3.1-8b-instant
-      methods: [baseline, two_prompt, cyclic]
-      benchmark: mmlu
-      split: robustness
-    - model: Qwen/Qwen2.5-7B-Instruct-Turbo
-      methods: [baseline, two_prompt, cyclic, pride]
-      benchmark: mmlu
-      split: robustness
-    # ARC-Challenge jobs (all models)
-    - model: gpt-4.1-mini
-      methods: [baseline, two_prompt, cyclic]
+    - model: Qwen/Qwen2.5-7B-Instruct
+      methods: [baseline, two_prompt, cyclic, pride, calibration]
       benchmark: arc_challenge
       split: robustness
-    - model: gemini-2.5-flash
-      methods: [baseline, two_prompt, cyclic]
+    - model: meta-llama/Llama-3.1-8B-Instruct
+      methods: [baseline, two_prompt, cyclic, calibration]
       benchmark: arc_challenge
       split: robustness
-    - model: llama-3.1-8b-instant
-      methods: [baseline, two_prompt, cyclic]
-      benchmark: arc_challenge
-      split: robustness
-    - model: Qwen/Qwen2.5-7B-Instruct-Turbo
-      methods: [baseline, two_prompt, cyclic, pride]
-      benchmark: arc_challenge
-      split: robustness
+
 # ---------------------------------------------------------------------------
 # Paths (relative to repo root)
 # ---------------------------------------------------------------------------
