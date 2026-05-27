@@ -44,7 +44,6 @@ Claude should behave conservatively. The current priority is paper correctness, 
 - Change benchmark schemas casually or silently rename method/model keys
 - Edit `src/twoprompt/config/` for normal run configuration
 - Rewrite working modules for style or convert this into a generic framework before the paper is finished
-- Prioritize framework refactoring until after the paper is reviewed/submitted
 
 **For important changes, prefer this workflow:**
 
