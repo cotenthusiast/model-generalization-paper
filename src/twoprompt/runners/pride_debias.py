@@ -23,46 +23,35 @@ import numpy as np
 
 OPTION_LETTERS: tuple[str, ...] = ("A", "B", "C", "D")
 
-def _normalize_option_letter(token: str | None) -> str | None:
-    if token is None:
-        return None
-    stripped = token.strip().upper()
-    return stripped if stripped in set(OPTION_LETTERS) else None
-
-
-def merge_option_logprobs(logprobs: list[Any] | None) -> dict[str, float]:
-    """Together-style first-token logprobs merged to max logprob per A–D."""
-    if not logprobs:
-        return {}
-    first = logprobs[0]
-    if not isinstance(first, Mapping):
-        return {}
-
-    tuples: list[tuple[str | None, Any]] = [
-        (first.get("token"), first.get("logprob")),
-    ]
-    tops = first.get("top_logprobs") or []
-    if isinstance(tops, list):
-        for t in tops:
-            if isinstance(t, Mapping):
-                tuples.append((t.get("token"), t.get("logprob")))
-
-    best: dict[str, float] = {}
-    for tok, lp in tuples:
-        letter = _normalize_option_letter(tok if isinstance(tok, str) else None)
-        if letter is None or lp is None:
-            continue
-        try:
-            lp_f = float(lp)
-        except (TypeError, ValueError):
-            continue
-        prev = best.get(letter)
-        if prev is None or lp_f > prev:
-            best[letter] = lp_f
-    return best
-
 
 _LOGPROB_FLOOR = -30.0
+
+
+def fill_missing_logprobs(
+        logp_map: Mapping[str, float],
+        letters: tuple[str, ...] = OPTION_LETTERS,
+        floor: float = _LOGPROB_FLOOR,
+) -> dict[str, float]:
+    """Return logp_map with any missing letters filled with floor value."""
+    return {L: float(logp_map.get(L, floor)) for L in letters}
+
+
+def ordered_logprob_array(
+        logp_map: Mapping[str, float],
+        letters: tuple[str, ...] = OPTION_LETTERS,
+) -> np.ndarray:
+    """Convert letter→logprob dict to ndarray where index i = letters[i]."""
+    return np.array([float(logp_map[L]) for L in letters], dtype=np.float64)
+
+
+def normalize_logits_to_distribution(
+        logits: np.ndarray,
+        eps_prob: float = 1e-12,
+) -> np.ndarray:
+    """Softmax logits, clip near-zero probabilities, and renormalize."""
+    probs = softmax(logits)
+    probs = np.clip(probs, eps_prob, 1.0)
+    return probs / probs.sum()
 
 
 def logprob_map_to_label_distribution(
@@ -71,21 +60,14 @@ def logprob_map_to_label_distribution(
         letters: Iterable[str] = OPTION_LETTERS,
         eps_prob: float = 1e-12,
 ) -> np.ndarray:
-    """Softmax over option-ID letters from merged first-token logprobs.
+    """Convert letter→logprob map to a probability distribution.
 
-    Missing letters receive ``_LOGPROB_FLOOR`` logits so they rarely win but
-    the distribution still normalizes like a categorical over four labels.
+    Output index i corresponds to letters[i] (default: 0=A, 1=B, 2=C, 3=D).
     """
     letters_t = tuple(letters)
-    logits = []
-    for L in letters_t:
-        v = float(logp_map.get(L, _LOGPROB_FLOOR))
-        logits.append(v)
-    logits_arr = np.array(logits, dtype=np.float64)
-    probs = softmax(logits_arr)
-    probs = np.clip(probs, eps_prob, 1.0)
-    probs = probs / probs.sum()
-    return probs
+    filled = fill_missing_logprobs(logp_map, letters_t)
+    logits = ordered_logprob_array(filled, letters_t)
+    return normalize_logits_to_distribution(logits, eps_prob)
 
 
 def softmax(logits: np.ndarray) -> np.ndarray:
