@@ -1,33 +1,26 @@
-"""Overnight experiment runner.
+"""Local model experiment runner.
 
 Usage:
-    python -m scripts.run_experiment [options]
+    python scripts/run_experiment.py [options]
 
 Options:
     --config PATH     Path to YAML config (default: config/default.yaml)
     --run-id ID       Explicit run ID; timestamp auto-generated if omitted
     --dry-run         Print preflight estimate and exit without running
-    --no-cache        Disable response caching for this run
     --yes             Skip the preflight confirmation prompt
 """
 
 from __future__ import annotations
 
 import argparse
-import asyncio
 import logging
 import shutil
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
 
-from twoprompt.clients.gemini_client import GeminiClient
-from twoprompt.clients.groq_client import GroqClient
-from twoprompt.clients.openai_client import OpenAIClient
-from twoprompt.clients.together_client import TogetherAIClient
-from twoprompt.infra.cache import CachingClientWrapper, ResponseCache
+from twoprompt.backends import HFCausalLMBackend, LocalGenerationConfig
 from twoprompt.infra.checkpoint import CheckpointManager
 from twoprompt.io.readers import read_normalized_questions, read_split_ids
 from twoprompt.io.writers import write_run_results
@@ -36,7 +29,6 @@ from twoprompt.runners.direct_mcq import DirectMCQRunner
 from twoprompt.runners.permutation import PermutationRunner
 from twoprompt.runners.pride import PriDeRunner
 from twoprompt.runners.two_stage import TwoStageRunner
-from twoprompt.runners.two_stage_permutation import TwoStagePermutationRunner
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -59,19 +51,15 @@ _METHOD_TO_RUNNER = {
     "additional_option": AdditionalOptionRunner,
 }
 
-# API calls per question for each method (used for preflight estimates).
+# Backend calls per question for each method (used for preflight estimates).
 # ``pride`` is handled specially in ``preflight_estimate`` (calibration + inference).
 _CALLS_PER_QUESTION = {
     "baseline": 1,
     "two_prompt": 2,       # stage 1 free-text + stage 2 matching
     "cyclic": 4,           # 4 cyclic permutations
-    "pride": 1,
+    "pride": 1,            # 1 score_options call per eval question
     "additional_option": 1,
 }
-
-# Approximate avg tokens per API call (very rough; for cost estimates only).
-_AVG_INPUT_TOKENS = 200
-_AVG_OUTPUT_TOKENS = 15
 
 # Maps (benchmark, split) to the artifact_group subdirectory used by read_split_ids.
 _BENCHMARK_ARTIFACT_GROUP = {
@@ -109,7 +97,6 @@ def resolve_paths(paths_cfg: dict) -> dict[str, Path]:
 # ---------------------------------------------------------------------------
 
 def _resolve_artifact_group(benchmark: str, split: str) -> str:
-    """Return the artifact_group subdirectory for a given benchmark/split pair."""
     benchmark_splits = _BENCHMARK_ARTIFACT_GROUP.get(benchmark)
     if benchmark_splits is None:
         raise ValueError(f"Unknown benchmark: {benchmark!r}")
@@ -120,13 +107,10 @@ def _resolve_artifact_group(benchmark: str, split: str) -> str:
 
 
 def load_questions(benchmark: str, split: str, paths: dict[str, Path]) -> list[dict]:
-    """Load normalized questions for a given benchmark and split."""
     if benchmark not in _BENCHMARK_NORMALIZED_FILE:
         raise ValueError(f"Unknown benchmark: {benchmark!r}")
-
     normalized_file = _BENCHMARK_NORMALIZED_FILE[benchmark]
     artifact_group = _resolve_artifact_group(benchmark, split)
-
     df = read_normalized_questions(normalized_file, paths["data_processed_dir"])
     split_ids = read_split_ids(split, paths["data_splits_dir"], artifact_group)
     df = df[df["question_id"].isin(split_ids)].drop_duplicates(subset="question_id")
@@ -138,11 +122,7 @@ def load_calibration_questions(
     eval_question_ids: set[str],
     paths: dict[str, Path],
 ) -> list[dict]:
-    """Return questions from the full normalized CSV that are NOT in the eval split.
-
-    Used by PriDeRunner so the position prior is estimated on questions the
-    runner will never be scored on, eliminating calibration/eval overlap.
-    """
+    """Return questions from the full normalized CSV that are NOT in the eval split."""
     if benchmark not in _BENCHMARK_NORMALIZED_FILE:
         logger.warning(
             "Unknown benchmark %r — returning empty PriDe calibration pool", benchmark
@@ -168,34 +148,22 @@ def load_calibration_questions(
 
 
 def count_split_questions(benchmark: str, split: str, paths: dict[str, Path]) -> int:
-    """Return question count without loading the full DataFrame."""
     artifact_group = _resolve_artifact_group(benchmark, split)
     return len(read_split_ids(split, paths["data_splits_dir"], artifact_group))
 
 
 # ---------------------------------------------------------------------------
-# Client factory
+# Backend factory
 # ---------------------------------------------------------------------------
 
-def build_client(model_name: str, model_cfg: dict):
-    """Construct a typed provider client from a model config dict."""
-    provider = model_cfg["provider"]
-    kwargs = dict(
-        model_name=model_name,
-        concurrency_limit=model_cfg.get("concurrency", 10),
-        min_delay_seconds=model_cfg.get("min_delay_seconds", 0.0),
-        max_retries=model_cfg.get("max_retries", 3),
-        timeout=model_cfg.get("timeout", 30),
+def build_backend(model_name: str, model_cfg: dict) -> HFCausalLMBackend:
+    """Construct a local HF backend from a model config dict."""
+    return HFCausalLMBackend(
+        model_path=model_cfg.get("model_path", model_name),
+        family=model_cfg.get("family", "unknown"),
+        size_label=model_cfg.get("size_label"),
+        device=model_cfg.get("device"),
     )
-    if provider == "openai":
-        return OpenAIClient(**kwargs)
-    if provider == "gemini":
-        return GeminiClient(**kwargs)
-    if provider == "groq":
-        return GroqClient(**kwargs)
-    if provider == "together":
-        return TogetherAIClient(**kwargs)
-    raise ValueError(f"Unknown provider: {provider!r} for model {model_name!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +171,7 @@ def build_client(model_name: str, model_cfg: dict):
 # ---------------------------------------------------------------------------
 
 def preflight_estimate(config: dict, paths: dict[str, Path]) -> None:
-    """Print a call count, cost, and wall-clock estimate without running."""
+    """Print a call count and wall-clock estimate without running."""
     run_cfg = config["run"]
     models_cfg = config["models"]
     jobs = run_cfg["jobs"]
@@ -211,8 +179,6 @@ def preflight_estimate(config: dict, paths: dict[str, Path]) -> None:
     print("\n── Preflight estimate ─────────────────────────────────────────")
 
     total_calls = 0
-    total_cost = 0.0
-    bottleneck_hours = 0.0
 
     for job in jobs:
         model_name = job["model"]
@@ -223,51 +189,22 @@ def preflight_estimate(config: dict, paths: dict[str, Path]) -> None:
         try:
             n_questions = count_split_questions(benchmark, split, paths)
         except Exception:
-            n_questions = 1000  # fallback if data not present
+            n_questions = 1000
             print(f"  (could not read split file for {benchmark}/{split} — using 1000)")
 
-        model_cfg = models_cfg.get(model_name, {})
-        pricing = model_cfg.get("pricing", {})
-        input_price = pricing.get("input_per_1m", 0.0)
-        output_price = pricing.get("output_per_1m", 0.0)
-
         job_calls = 0
-        calib_n = int(run_cfg.get("pride_calibration_n", 50))
-        max_calib_effect = min(calib_n, n_questions)
         for m in methods:
             if m == "pride":
-                # N eval items: 1 direct call each.
-                # K calibration items (separate pool): 4 cyclic calls each.
                 calib_k = int(run_cfg.get("pride_calibration_n", 50))
                 job_calls += n_questions + 4 * calib_k
             else:
                 job_calls += _CALLS_PER_QUESTION.get(m, 1) * n_questions
-        job_cost = job_calls * (
-            (_AVG_INPUT_TOKENS * input_price + _AVG_OUTPUT_TOKENS * output_price) / 1_000_000
-        )
-
-        min_delay = model_cfg.get("min_delay_seconds", 0.0)
-        concurrency = model_cfg.get("concurrency", 10)
-        if min_delay > 0:
-            rate = min(concurrency, 1.0 / min_delay)
-        else:
-            rate = concurrency / 2.0  # assume ~2s avg latency
-        job_hours = (job_calls / rate) / 3600
 
         total_calls += job_calls
-        total_cost += job_cost
-        bottleneck_hours = max(bottleneck_hours, job_hours)
-
-        cost_str = f"~${job_cost:.2f}" if job_cost > 0 else "free"
-        print(
-            f"  {model_name:<30}  {job_calls:>6} calls  {cost_str:>8}  ~{job_hours:.1f}h"
-        )
+        print(f"  {model_name:<40}  {job_calls:>6} calls")
 
     print(f"  {'─'*60}")
-    total_cost_str = f"~${total_cost:.2f}" if total_cost > 0 else "$0.00"
-    print(f"  {'Total':<30}  {total_calls:>6} calls  {total_cost_str:>8}")
-    print(f"  Wall-clock (models run in parallel): ~{bottleneck_hours:.1f}h")
-    print(f"  Cache: {'enabled' if run_cfg.get('cache_enabled', True) else 'disabled'}")
+    print(f"  {'Total':<40}  {total_calls:>6} calls")
     print(f"  Checkpoint every: {run_cfg.get('checkpoint_every_n', 50)} questions")
     print("───────────────────────────────────────────────────────────────\n")
 
@@ -276,8 +213,8 @@ def preflight_estimate(config: dict, paths: dict[str, Path]) -> None:
 # Job execution
 # ---------------------------------------------------------------------------
 
-async def run_single_method(
-    client,
+def run_single_method(
+    backend: HFCausalLMBackend,
     model_name: str,
     method: str,
     benchmark: str,
@@ -287,21 +224,21 @@ async def run_single_method(
     run_cfg: dict,
     paths: dict[str, Path],
 ) -> dict:
-    """Run one (model, method, benchmark, split) job with checkpointing.
-
-    Returns a summary dict with counts for the final log.
-    """
+    """Run one (model, method, benchmark, split) job with checkpointing."""
     runner_cls = _METHOD_TO_RUNNER[method]
+    gen_config = LocalGenerationConfig(
+        max_new_tokens=run_cfg.get("max_tokens", 500),
+        temperature=run_cfg.get("temperature", 0.0),
+        seed=run_cfg.get("seed", 42),
+    )
     common_kw = dict(
-        client=client,
+        backend=backend,
         method_name=method,
         split_name=split,
         prompt_version=run_cfg.get("prompt_version", "v1"),
         prompts_dir=paths["prompts_dir"],
         run_id=run_id,
-        temperature=run_cfg.get("temperature", 0.0),
-        max_tokens=run_cfg.get("max_tokens", 500),
-        seed=run_cfg.get("seed", 42),
+        generation_config=gen_config,
     )
     if method == "pride":
         eval_ids = {q["question_id"] for q in questions}
@@ -336,7 +273,6 @@ async def run_single_method(
     started_at: str = (
         state["started_at"] if state else datetime.now(timezone.utc).isoformat()
     )
-    # Backfill benchmark field for rows restored from an older checkpoint.
     for row in accumulated:
         row.setdefault("benchmark", benchmark)
 
@@ -350,21 +286,16 @@ async def run_single_method(
     else:
         logger.info(
             "%s  starting: %d remaining / %d total",
-            tag,
-            len(remaining),
-            len(questions),
+            tag, len(remaining), len(questions),
         )
 
         n = run_cfg.get("checkpoint_every_n", 50)
-        failed = 0
-
         for batch_start in range(0, len(remaining), n):
             batch = remaining[batch_start : batch_start + n]
             try:
-                batch_results = await runner.run_many(batch)
+                batch_results = runner.run_many(batch)
             except Exception as exc:
                 logger.error("%s  batch failed: %s — continuing", tag, exc)
-                failed += len(batch)
                 continue
 
             for row in batch_results:
@@ -372,9 +303,7 @@ async def run_single_method(
             accumulated.extend(batch_results)
             completed_ids.extend(r["question_id"] for r in batch_results)
             checkpoint_mgr.save(completed_ids, accumulated, started_at)
-
-            done = len(accumulated)
-            logger.info("%s  %d/%d questions complete", tag, done, len(questions))
+            logger.info("%s  %d/%d questions complete", tag, len(accumulated), len(questions))
 
     output_path = write_run_results(
         results=accumulated,
@@ -398,7 +327,7 @@ async def run_single_method(
     }
 
 
-async def run_model_jobs(
+def run_model_jobs(
     model_name: str,
     model_cfg: dict,
     jobs_for_model: list[dict],
@@ -406,18 +335,14 @@ async def run_model_jobs(
     run_id: str,
     run_cfg: dict,
     paths: dict[str, Path],
-    use_cache: bool,
 ) -> list[dict]:
-    """Run all jobs for one model sequentially, sharing a single client."""
+    """Load one backend for a model and run all its jobs sequentially."""
     try:
-        client = build_client(model_name, model_cfg)
+        backend = build_backend(model_name, model_cfg)
+        backend.load()
     except Exception as exc:
-        logger.error("[%s] Failed to build client: %s — skipping all jobs", model_name, exc)
+        logger.error("[%s] Failed to load backend: %s — skipping all jobs", model_name, exc)
         return []
-
-    if use_cache:
-        cache = ResponseCache(paths["cache_dir"])
-        client = CachingClientWrapper(client, cache)
 
     summaries = []
     for job in jobs_for_model:
@@ -425,8 +350,8 @@ async def run_model_jobs(
             key = (job["benchmark"], job["split"])
             questions = questions_cache[key]
             try:
-                summary = await run_single_method(
-                    client=client,
+                summary = run_single_method(
+                    backend=backend,
                     model_name=model_name,
                     method=method,
                     benchmark=job["benchmark"],
@@ -440,9 +365,7 @@ async def run_model_jobs(
             except Exception as exc:
                 logger.error(
                     "[%s] %s failed: %s — continuing with remaining methods",
-                    model_name,
-                    method,
-                    exc,
+                    model_name, method, exc,
                 )
                 summaries.append(
                     {"model": model_name, "method": method, "error": str(exc)}
@@ -457,7 +380,7 @@ async def run_model_jobs(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Overnight experiment runner for two-prompt research."
+        description="Local model experiment runner for two-prompt research."
     )
     parser.add_argument(
         "--config",
@@ -473,22 +396,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print preflight estimate and exit without making any API calls",
-    )
-    parser.add_argument(
-        "--no-cache",
-        action="store_true",
-        help="Disable response caching for this run",
+        help="Print preflight estimate and exit without making any backend calls",
     )
     parser.add_argument(
         "--yes",
         action="store_true",
-        help="Skip the preflight confirmation prompt (for automated runs)",
+        help="Skip the preflight confirmation prompt (for automated/SLURM runs)",
     )
     return parser.parse_args()
 
 
-async def main() -> None:
+def main() -> None:
     args = parse_args()
 
     config = load_config(args.config)
@@ -497,7 +415,6 @@ async def main() -> None:
     models_cfg = config["models"]
     jobs = run_cfg["jobs"]
 
-    # Always show preflight estimate.
     preflight_estimate(config, paths)
 
     if args.dry_run:
@@ -514,13 +431,9 @@ async def main() -> None:
             return
 
     run_id = args.run_id or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    use_cache = run_cfg.get("cache_enabled", True) and not args.no_cache
-
     logger.info("Run ID: %s", run_id)
-    logger.info("Cache: %s", "enabled" if use_cache else "disabled")
     logger.info("Config: %s", args.config)
 
-    # Snapshot config and prompt templates into the run directory.
     run_dir = paths["runs_dir"] / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(args.config, run_dir / "config.yaml")
@@ -531,7 +444,6 @@ async def main() -> None:
         shutil.copytree(prompt_src, prompt_dst)
     logger.info("Snapshotted config and prompts/%s → %s", prompt_version, run_dir)
 
-    # Pre-load questions for each unique (benchmark, split) combination.
     questions_cache: dict[tuple, list[dict]] = {}
     for job in jobs:
         key = (job["benchmark"], job["split"])
@@ -540,15 +452,14 @@ async def main() -> None:
             questions_cache[key] = load_questions(job["benchmark"], job["split"], paths)
             logger.info("  %d questions loaded", len(questions_cache[key]))
 
-    # Group jobs by model so each model gets one coroutine.
     jobs_by_model: dict[str, list[dict]] = {}
     for job in jobs:
         jobs_by_model.setdefault(job["model"], []).append(job)
 
-    # Launch one coroutine per model; they run concurrently.
-    logger.info("Launching %d model(s) concurrently...", len(jobs_by_model))
-    model_coroutines = [
-        run_model_jobs(
+    # Models run sequentially — only one set of weights in GPU memory at a time.
+    all_summaries: list[list[dict]] = []
+    for model_name, model_jobs in jobs_by_model.items():
+        summaries = run_model_jobs(
             model_name=model_name,
             model_cfg=models_cfg[model_name],
             jobs_for_model=model_jobs,
@@ -556,13 +467,9 @@ async def main() -> None:
             run_id=run_id,
             run_cfg=run_cfg,
             paths=paths,
-            use_cache=use_cache,
         )
-        for model_name, model_jobs in jobs_by_model.items()
-    ]
-    all_summaries: list[list[dict]] = await asyncio.gather(*model_coroutines)
+        all_summaries.append(summaries)
 
-    # Print final summary.
     flat = [s for per_model in all_summaries for s in per_model]
     print("\n── Run complete ───────────────────────────────────────────────")
     print(f"  Run ID: {run_id}")
@@ -570,15 +477,15 @@ async def main() -> None:
     print()
     for s in flat:
         if "error" in s:
-            print(f"  FAILED  {s['model']:<30}  {s['method']:<22}  {s['error']}")
+            print(f"  FAILED  {s['model']:<40}  {s['method']:<22}  {s['error']}")
         else:
             pct = f"{100 * s['success'] / s['total']:.0f}%" if s["total"] else "—"
             print(
-                f"  OK      {s['model']:<30}  {s['method']:<22}"
+                f"  OK      {s['model']:<40}  {s['method']:<22}"
                 f"  {s['success']}/{s['total']} success ({pct})"
             )
     print("───────────────────────────────────────────────────────────────\n")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
