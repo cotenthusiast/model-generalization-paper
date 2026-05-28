@@ -7,14 +7,16 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=80G
-#SBATCH --gres=gpu:1
-# TODO: set --partition to the correct GPU partition name on Kelvin2.
-# Run `sinfo` on the login node to see available partitions.
-# e.g. #SBATCH --partition=k2-gpu
+#SBATCH --partition=k2-gpu-a100
+#SBATCH --gres=gpu:a100:1
+# TODO: verify partition and GRES with `sinfo` on the Kelvin2 login node before submitting.
 #
-# For larger models (32B, 70B, 72B) you will need multiple GPUs.
-# Uncomment and adjust:
-# #SBATCH --gres=gpu:4
+# H100 alternative (higher memory, useful for 32B/70B/72B models):
+# #SBATCH --partition=k2-gpu-h100
+# #SBATCH --gres=gpu:h100:1
+#
+# For 70B/72B models, multiple GPUs will be needed. Adjust --gres accordingly,
+# e.g. --gres=gpu:a100:4, and ensure device: auto is set in config.
 
 set -euo pipefail
 
@@ -23,16 +25,21 @@ cd "$REPO_ROOT"
 
 mkdir -p logs
 
+SCRATCH="/mnt/scratch2/users/$USER"
+VENV_DIR="$SCRATCH/venvs/mcq-generalization"
+
+export HF_HOME="$SCRATCH/hf"
+export HF_HUB_CACHE="$HF_HOME/hub"
+export MODEL_ROOT="$SCRATCH/models"
+export RESULTS_DIR="$SCRATCH/results/mcq-generalization"
+
 module load apps/python3/3.12.4/gcc-14.1.0
 
-source .venv/bin/activate
-
-export HF_HOME="/mnt/scratch2/users/$USER/hf"
-export HF_HUB_CACHE="/mnt/scratch2/users/$USER/hf/hub"
+source "$VENV_DIR/bin/activate"
 
 echo "Job ID:  $SLURM_JOB_ID"
 echo "Node:    $SLURMD_NODENAME"
-echo "GPU:     $CUDA_VISIBLE_DEVICES"
+echo "GPU:     ${CUDA_VISIBLE_DEVICES:-none}"
 echo "Python:  $(python --version)"
 echo "Repo:    $REPO_ROOT"
 

@@ -7,10 +7,9 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH --gres=gpu:1
-# TODO: set --partition to the correct GPU partition name on Kelvin2.
-# Run `sinfo` on the login node to see available partitions.
-# e.g. #SBATCH --partition=k2-gpu
+#SBATCH --partition=k2-gpu-a100mig
+#SBATCH --gres=gpu:2g.20gb:1
+# TODO: verify partition and GRES with `sinfo` on the Kelvin2 login node before submitting.
 
 set -euo pipefail
 
@@ -19,16 +18,21 @@ cd "$REPO_ROOT"
 
 mkdir -p logs
 
+SCRATCH="/mnt/scratch2/users/$USER"
+VENV_DIR="$SCRATCH/venvs/mcq-generalization"
+
+export HF_HOME="$SCRATCH/hf"
+export HF_HUB_CACHE="$HF_HOME/hub"
+export MODEL_ROOT="$SCRATCH/models"
+export RESULTS_DIR="$SCRATCH/results/mcq-generalization"
+
 module load apps/python3/3.12.4/gcc-14.1.0
 
-source .venv/bin/activate
-
-export HF_HOME="/mnt/scratch2/users/$USER/hf"
-export HF_HUB_CACHE="/mnt/scratch2/users/$USER/hf/hub"
+source "$VENV_DIR/bin/activate"
 
 echo "Job ID:  $SLURM_JOB_ID"
 echo "Node:    $SLURMD_NODENAME"
-echo "GPU:     $CUDA_VISIBLE_DEVICES"
+echo "GPU:     ${CUDA_VISIBLE_DEVICES:-none}"
 echo "Python:  $(python --version)"
 echo "Repo:    $REPO_ROOT"
 

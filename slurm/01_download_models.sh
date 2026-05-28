@@ -1,37 +1,53 @@
 #!/bin/bash
 # Download HuggingFace model weights to scratch storage.
 #
-# Run this DIRECTLY on the login node (not via sbatch) since compute nodes
-# may not have outbound internet access:
+# Run only after verifying Kelvin2 download policy. Prefer an interactive
+# compute job or data-transfer node if available. Do not repeatedly download
+# large models on the login node.
 #
+# Usage:
 #   bash slurm/01_download_models.sh
 #
-# Requires: huggingface-cli login (run once interactively before this script)
-# Models are saved to HF_HOME so all subsequent SLURM jobs find them automatically.
+# Prerequisites:
+#   huggingface-cli login   (run once interactively before this script)
+#   Meta licence accepted on huggingface.co (required for Llama models)
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+SCRATCH="/mnt/scratch2/users/$USER"
+VENV_DIR="$SCRATCH/venvs/mcq-generalization"
+
+export HF_HOME="$SCRATCH/hf"
+export HF_HUB_CACHE="$HF_HOME/hub"
+export MODEL_ROOT="$SCRATCH/models"
+
+mkdir -p "$HF_HOME" "$MODEL_ROOT"
+
 module load apps/python3/3.12.4/gcc-14.1.0
 
-source .venv/bin/activate
+source "$VENV_DIR/bin/activate"
 
-export HF_HOME="/mnt/scratch2/users/$USER/hf"
-export HF_HUB_CACHE="/mnt/scratch2/users/$USER/hf/hub"
+echo "Downloading to: $MODEL_ROOT"
+echo "HF cache:       $HF_HOME"
 
-mkdir -p "$HF_HOME"
+# --- Tiny model first — verify everything works before downloading large weights ---
 
-echo "Downloading to: $HF_HOME"
+echo "--- Qwen/Qwen2.5-0.5B-Instruct (~1GB, smoke-test model) ---"
+huggingface-cli download Qwen/Qwen2.5-0.5B-Instruct \
+    --local-dir "$MODEL_ROOT/Qwen2.5-0.5B-Instruct"
 
-# Qwen 7B (~15GB)
-echo "--- Qwen/Qwen2.5-7B-Instruct ---"
-huggingface-cli download Qwen/Qwen2.5-7B-Instruct
+# --- Uncomment models below once the tiny download succeeds ---
 
-# Llama 3.1 8B (~16GB) — requires accepted Meta licence on huggingface.co
-echo "--- meta-llama/Llama-3.1-8B-Instruct ---"
-huggingface-cli download meta-llama/Llama-3.1-8B-Instruct
+# echo "--- Qwen/Qwen2.5-7B-Instruct (~15GB) ---"
+# huggingface-cli download Qwen/Qwen2.5-7B-Instruct \
+#     --local-dir "$MODEL_ROOT/Qwen2.5-7B-Instruct"
 
-echo "All models downloaded."
-echo "Total cache size: $(du -sh "$HF_HOME" | cut -f1)"
+# echo "--- meta-llama/Llama-3.1-8B-Instruct (~16GB) ---"
+# huggingface-cli download meta-llama/Llama-3.1-8B-Instruct \
+#     --local-dir "$MODEL_ROOT/Llama-3.1-8B-Instruct"
+
+echo "Download complete."
+echo "Scratch usage: $(du -sh "$SCRATCH" | cut -f1)"
