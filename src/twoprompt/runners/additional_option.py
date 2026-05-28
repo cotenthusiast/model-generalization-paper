@@ -18,7 +18,7 @@ class AdditionalOptionRunner(DirectMCQRunner):
         return build_direct_mcq_prompt(
             template=self._prompts["direct_mcq"],
             question=question_row["question_text"],
-            options=list(self._build_options(question_row).values()) + ["I don't know"]
+            options=list(self._build_options(question_row).values()),
         )
     
     def _build_options(self, question_row: Any) -> dict[str, str]:

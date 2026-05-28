@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=twoprompt_full
+#SBATCH --job-name=mcqgen_full
 #SBATCH --output=logs/full_%j.out
 #SBATCH --error=logs/full_%j.err
 #SBATCH --time=24:00:00
