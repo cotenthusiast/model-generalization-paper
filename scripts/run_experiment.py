@@ -21,10 +21,12 @@ from pathlib import Path
 import yaml
 
 from twoprompt.backends import HFCausalLMBackend, LocalGenerationConfig
+from twoprompt.backends.dummy import DummyBackend
 from twoprompt.infra.checkpoint import CheckpointManager
 from twoprompt.io.readers import read_normalized_questions, read_split_ids
 from twoprompt.io.writers import write_run_results
 from twoprompt.runners.additional_option import AdditionalOptionRunner
+from twoprompt.runners.calibration import AnswerCalibrationRunner
 from twoprompt.runners.direct_mcq import DirectMCQRunner
 from twoprompt.runners.permutation import PermutationRunner
 from twoprompt.runners.pride import PriDeRunner
@@ -48,6 +50,7 @@ _METHOD_TO_RUNNER = {
     "two_prompt": TwoStageRunner,
     "cyclic": PermutationRunner,
     "pride": PriDeRunner,
+    "calibration": AnswerCalibrationRunner,
     "additional_option": AdditionalOptionRunner,
 }
 
@@ -58,6 +61,7 @@ _CALLS_PER_QUESTION = {
     "two_prompt": 2,       # stage 1 free-text + stage 2 matching
     "cyclic": 4,           # 4 cyclic permutations
     "pride": 1,            # 1 score_options call per eval question
+    "calibration": 1,      # 1 score_options call per eval question (+ 1 setup call total)
     "additional_option": 1,
 }
 
@@ -156,8 +160,10 @@ def count_split_questions(benchmark: str, split: str, paths: dict[str, Path]) ->
 # Backend factory
 # ---------------------------------------------------------------------------
 
-def build_backend(model_name: str, model_cfg: dict) -> HFCausalLMBackend:
-    """Construct a local HF backend from a model config dict."""
+def build_backend(model_name: str, model_cfg: dict) -> HFCausalLMBackend | DummyBackend:
+    """Construct a local backend from a model config dict."""
+    if model_cfg.get("family") == "dummy":
+        return DummyBackend()
     return HFCausalLMBackend(
         model_path=model_cfg.get("model_path", model_name),
         family=model_cfg.get("family", "unknown"),
