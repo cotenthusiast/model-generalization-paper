@@ -185,7 +185,7 @@ class TestParseModelAnswer:
     def test_uses_text_match_only_after_missing_direct_letter(self, sample_options, monkeypatch) -> None:
         text_match_called = False
 
-        def fake_extract_choice_letter(normalized_text):
+        def fake_extract_choice_letter(normalized_text, valid_choices=None):
             return ParseResult(
                 final_choice=None, status=PARSE_MISSING,
                 raw_text=None, normalized_text=normalized_text,
@@ -209,3 +209,21 @@ class TestParseModelAnswer:
         assert text_match_called is True
         assert result.final_choice == "B"
         assert result.status == PARSE_OK
+
+    def test_parses_option_e_when_e_in_options(self) -> None:
+        options_with_e = {
+            "A": "FTP",
+            "B": "HTTP",
+            "C": "HTTPS",
+            "D": "SMTP",
+            "E": "I don't know",
+        }
+        result = parse_model_answer("E", options_with_e)
+        assert result.final_choice == "E"
+        assert result.status == PARSE_OK
+
+    def test_e_not_parsed_when_e_not_in_options(self) -> None:
+        standard_options = {"A": "FTP", "B": "HTTP", "C": "HTTPS", "D": "SMTP"}
+        result = parse_model_answer("E", standard_options)
+        assert result.final_choice is None
+        assert result.status == PARSE_MISSING

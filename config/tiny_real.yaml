@@ -1,0 +1,41 @@
+# Tiny real config — first end-to-end test with actual model weights.
+# Uses Qwen 0.5B (smallest available), 5 questions, minimal method set.
+# Run after downloading weights with slurm/01_download_models.sh.
+# Run with: python scripts/run_experiment.py --config config/tiny_real.yaml
+
+models:
+  Qwen/Qwen2.5-0.5B-Instruct:
+    model_path: Qwen/Qwen2.5-0.5B-Instruct
+    family: qwen
+    size_label: 0.5B
+    device: auto
+
+run:
+  temperature: 0.0
+  max_tokens: 500
+  seed: 42
+  prompt_version: "v1"
+
+  max_questions: 5
+
+  checkpoint_every_n: 5
+
+  pride_calibration_n: 2
+  pride_calibration_seed: 42
+
+  fallback_on_parse_failure: false
+
+  jobs:
+    - model: Qwen/Qwen2.5-0.5B-Instruct
+      methods: [baseline, calibration, additional_option]
+      benchmark: mmlu
+      split: robustness
+
+paths:
+  runs_dir: runs
+  checkpoints_dir: checkpoints
+  cache_dir: .cache/responses
+  reports_dir: reports
+  data_processed_dir: data/processed
+  data_splits_dir: data/splits
+  prompts_dir: prompts
