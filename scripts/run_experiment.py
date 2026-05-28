@@ -110,7 +110,12 @@ def _resolve_artifact_group(benchmark: str, split: str) -> str:
     return group
 
 
-def load_questions(benchmark: str, split: str, paths: dict[str, Path]) -> list[dict]:
+def load_questions(
+    benchmark: str,
+    split: str,
+    paths: dict[str, Path],
+    max_questions: int | None = None,
+) -> list[dict]:
     if benchmark not in _BENCHMARK_NORMALIZED_FILE:
         raise ValueError(f"Unknown benchmark: {benchmark!r}")
     normalized_file = _BENCHMARK_NORMALIZED_FILE[benchmark]
@@ -118,6 +123,8 @@ def load_questions(benchmark: str, split: str, paths: dict[str, Path]) -> list[d
     df = read_normalized_questions(normalized_file, paths["data_processed_dir"])
     split_ids = read_split_ids(split, paths["data_splits_dir"], artifact_group)
     df = df[df["question_id"].isin(split_ids)].drop_duplicates(subset="question_id")
+    if max_questions is not None:
+        df = df.head(max_questions)
     return df.to_dict(orient="records")
 
 
@@ -197,6 +204,10 @@ def preflight_estimate(config: dict, paths: dict[str, Path]) -> None:
         except Exception:
             n_questions = 1000
             print(f"  (could not read split file for {benchmark}/{split} — using 1000)")
+
+        max_q = run_cfg.get("max_questions") or None
+        if max_q is not None:
+            n_questions = min(n_questions, int(max_q))
 
         job_calls = 0
         for m in methods:
@@ -450,12 +461,16 @@ def main() -> None:
         shutil.copytree(prompt_src, prompt_dst)
     logger.info("Snapshotted config and prompts/%s → %s", prompt_version, run_dir)
 
+    max_questions = run_cfg.get("max_questions") or None
+
     questions_cache: dict[tuple, list[dict]] = {}
     for job in jobs:
         key = (job["benchmark"], job["split"])
         if key not in questions_cache:
             logger.info("Loading questions: benchmark=%s split=%s", *key)
-            questions_cache[key] = load_questions(job["benchmark"], job["split"], paths)
+            questions_cache[key] = load_questions(
+                job["benchmark"], job["split"], paths, max_questions=max_questions
+            )
             logger.info("  %d questions loaded", len(questions_cache[key]))
 
     jobs_by_model: dict[str, list[dict]] = {}
