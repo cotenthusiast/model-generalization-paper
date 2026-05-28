@@ -95,11 +95,8 @@ tests/                      test suite
 ## Setup
 
 ```bash
-# Core dependencies
-pip install -e ".[dev]"
-
-# Local model inference (required for HPC experiments)
-pip install -e ".[local]"
+# Install all dependencies (dev + local model inference)
+pip install -e ".[dev,local]"
 
 cp .env.example .env       # fill in API keys if using cloud models
 ```
@@ -157,18 +154,19 @@ pip install -e ".[dev,local]"
 #    scp -r data/ <user>@kelvin2.alces.network:/mnt/scratch2/users/$USER/mcq-generalization/
 
 # 5. Authenticate with HuggingFace (needed for Llama models)
+#    HF_HOME and HF_HUB_CACHE are set inside each SLURM script automatically
 huggingface-cli login
 
 # 6. Download tiny model first to verify everything works
 bash slurm/01_download_models.sh
 
-# 7. Smoke test — verify imports and dry-run (no GPU needed)
+# 7. Smoke test — verify imports, dry-run, and real dummy execution (no GPU needed)
 sbatch slurm/00_smoke_test.sh
 
-# 8. Dummy backend run — full pipeline with no model weights
-python scripts/run_experiment.py --config config/dummy.yaml --yes
+# 8. Tiny real run — 5 questions, Qwen 0.5B, confirms weights load correctly
+sbatch slurm/02_tiny_real.sh
 
-# 9. Small batch — 20 questions, real model weights
+# 9. Small batch — 20 questions, Qwen 7B + Llama 8B, all methods
 sbatch slurm/02_small_batch.sh
 
 # 10. Full run — only after small batch looks correct
