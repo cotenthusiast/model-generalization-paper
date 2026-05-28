@@ -33,6 +33,8 @@ class AnswerCalibrationRunner(LocalExperimentRunner):
 
     def setup(self, question_rows) -> None:
         """Run calibration phase once before inference begins."""
+        if getattr(self, "_calibration_ready", False):
+            return
         self._prior = self._run_calibration()
         self._calibration_ready = True
 

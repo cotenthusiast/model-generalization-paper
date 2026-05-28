@@ -250,7 +250,7 @@ def parse_model_answer(
         Final ParseResult for downstream scoring.
     """
     normalized_text = normalize_output_text(raw_text)
-    temp_result = extract_choice_letter(normalized_text)
+    temp_result = extract_choice_letter(normalized_text, valid_choices=options.keys())
     if temp_result.status == PARSE_MISSING:
         temp_result = extract_choice_text_match(normalized_text, options)
     return ParseResult(

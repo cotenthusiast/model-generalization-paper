@@ -43,7 +43,15 @@ reports/
 
 # Logs
 logs/*
+logs/*.out
+logs/*.err
 !logs/.gitkeep
+
+# Model weight files — never commit large binaries
+*.safetensors
+*.bin
+*.pt
+*.pth
 
 build/
 dist/

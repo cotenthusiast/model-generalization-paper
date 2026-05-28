@@ -12,6 +12,8 @@ run:
   seed: 42
   prompt_version: "v1"
 
+  max_questions: 5
+
   checkpoint_every_n: 10
 
   pride_calibration_n: 2

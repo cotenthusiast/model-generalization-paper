@@ -133,9 +133,49 @@ Reports written to `reports/<RUN_ID>/<benchmark>/`.
 
 ---
 
-## HPC Notes
+## HPC Setup (Kelvin2)
 
-Experiments run on Kelvin2 (Queen's University Belfast) via SLURM batch jobs. Python code has no SLURM dependency — SLURM scripts live separately in `jobs/` (not yet committed) and invoke the same `scripts/run_experiment.py` entry point. See CLAUDE.md for Kelvin2 guidance.
+Experiments run on Kelvin2 (Queen's University Belfast) via SLURM batch jobs. SLURM scripts live in `slurm/` and invoke `scripts/run_experiment.py`. Python code has no SLURM dependency.
+
+**First-time setup on Kelvin2:**
+
+```bash
+# 1. Clone repo into scratch (home quota is too small for outputs)
+cd /mnt/scratch2/users/$USER
+git clone <repo-url> mcq-generalization
+cd mcq-generalization
+
+# 2. Create venv on scratch (not home — home quota is 50GB)
+python3 -m venv /mnt/scratch2/users/$USER/venvs/mcq-generalization
+source /mnt/scratch2/users/$USER/venvs/mcq-generalization/bin/activate
+
+# 3. Install dependencies
+pip install -e ".[dev,local]"
+
+# 4. Copy benchmark data from local machine
+#    (data/ is gitignored — run scp from your laptop)
+#    scp -r data/ <user>@kelvin2.alces.network:/mnt/scratch2/users/$USER/mcq-generalization/
+
+# 5. Authenticate with HuggingFace (needed for Llama models)
+huggingface-cli login
+
+# 6. Download tiny model first to verify everything works
+bash slurm/01_download_models.sh
+
+# 7. Smoke test — verify imports and dry-run (no GPU needed)
+sbatch slurm/00_smoke_test.sh
+
+# 8. Dummy backend run — full pipeline with no model weights
+python scripts/run_experiment.py --config config/dummy.yaml --yes
+
+# 9. Small batch — 20 questions, real model weights
+sbatch slurm/02_small_batch.sh
+
+# 10. Full run — only after small batch looks correct
+sbatch slurm/03_full_run.sh
+```
+
+Verify the correct partition and GRES names with `sinfo` on the login node before submitting GPU jobs — partition names in `slurm/02_small_batch.sh` and `slurm/03_full_run.sh` are placeholders.
 
 ---
 
