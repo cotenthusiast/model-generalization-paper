@@ -33,6 +33,10 @@ echo "Venv:   $VENV_DIR"
 python -c "import twoprompt; print('twoprompt import OK')"
 python -c "from twoprompt.backends.dummy import DummyBackend; print('DummyBackend import OK')"
 
+# Preflight estimate — no model calls
 python scripts/run_experiment.py --config config/dummy.yaml --dry-run
+
+# Real dummy execution — runs all runners with DummyBackend (5 questions, no GPU needed)
+python scripts/run_experiment.py --config config/dummy.yaml --yes
 
 echo "Smoke test passed."
