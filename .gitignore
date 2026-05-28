@@ -41,6 +41,9 @@ checkpoints/
 # Report outputs
 reports/
 
+# Generic outputs directory
+outputs/
+
 # Logs
 logs/*
 logs/*.out
