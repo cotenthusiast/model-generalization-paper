@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=twoprompt_tiny
+#SBATCH --job-name=mcqgen_tiny
 #SBATCH --output=logs/tiny_%j.out
 #SBATCH --error=logs/tiny_%j.err
 #SBATCH --time=00:30:00

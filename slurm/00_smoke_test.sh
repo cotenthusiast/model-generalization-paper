@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=twoprompt_smoke
+#SBATCH --job-name=mcqgen_smoke
 #SBATCH --output=logs/smoke_%j.out
 #SBATCH --error=logs/smoke_%j.err
 #SBATCH --time=00:10:00
