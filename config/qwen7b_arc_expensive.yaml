@@ -1,0 +1,43 @@
+# Qwen 7B expensive config — ARC-Challenge, 1000 questions, two_prompt + cyclic + pride.
+# max_tokens: 500 is required here. two_prompt Stage 1 generates free-text reasoning and
+# truncating at 64 would silently cut off answers. cyclic and pride would be safe at 64,
+# but per-method token control is not supported — all jobs share one max_tokens value.
+# Run after qwen7b_arc_core.yaml passes.
+# Run with: python scripts/run_experiment.py --config config/qwen7b_arc_expensive.yaml
+
+models:
+  Qwen/Qwen2.5-7B-Instruct:
+    model_path: Qwen/Qwen2.5-7B-Instruct
+    family: qwen
+    size_label: 7B
+    device: auto
+
+run:
+  temperature: 0.0
+  max_tokens: 500
+  seed: 42
+  prompt_version: "v1"
+
+  max_questions: 1000
+
+  checkpoint_every_n: 50
+
+  pride_calibration_n: 50
+  pride_calibration_seed: 42
+
+  fallback_on_parse_failure: false
+
+  jobs:
+    - model: Qwen/Qwen2.5-7B-Instruct
+      methods: [two_prompt, cyclic, pride]
+      benchmark: arc_challenge
+      split: robustness
+
+paths:
+  runs_dir: runs
+  checkpoints_dir: checkpoints
+  cache_dir: .cache/responses
+  reports_dir: reports
+  data_processed_dir: data/processed
+  data_splits_dir: data/splits
+  prompts_dir: prompts
