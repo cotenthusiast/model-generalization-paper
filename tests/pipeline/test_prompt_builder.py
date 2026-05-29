@@ -25,7 +25,7 @@ class TestBuildDirectMcqPrompt:
         option_d = "four"
 
         prompt = build_direct_mcq_prompt(
-            _TEMPLATES["direct_mcq"], question, option_a, option_b, option_c, option_d
+            _TEMPLATES["direct_mcq"], question, [option_a, option_b, option_c, option_d]
         )
 
         assert question in prompt

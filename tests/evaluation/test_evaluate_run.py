@@ -29,7 +29,7 @@ def _row(
     *,
     question_id: str,
     method_name: str,
-    model_name: str = "gpt-4.1-mini",
+    model_name: str = "Qwen/Qwen2.5-7B-Instruct",
     model_status: str = "success",
     is_correct=None,
     parsed_choice=None,
@@ -233,7 +233,7 @@ class TestComputeAccuracyFallbackCount:
         df_after = apply_baseline_fallback(df_mixed)
         accuracy = compute_accuracy(df_after)
         # q1 was substituted in two_prompt — fallback_count for (two_prompt, gpt-4.1-mini) == 1
-        row = accuracy[(accuracy["method"] == "two_prompt") & (accuracy["model"] == "gpt-4.1-mini")]
+        row = accuracy[(accuracy["method"] == "two_prompt") & (accuracy["model"] == "Qwen/Qwen2.5-7B-Instruct")]
         assert row.iloc[0]["fallback_count"] == 1
 
     def test_fallback_count_zero_for_baseline_method(self, df_mixed):
