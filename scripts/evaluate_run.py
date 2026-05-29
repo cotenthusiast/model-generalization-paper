@@ -30,12 +30,9 @@ METHOD_ORDER = [
     "pride",
 ]
 
+# add models here as experiments are run
 MODEL_ORDER = [
-    "gpt-4.1-mini",
-    "gemini-2.5-flash",
-    "llama-3.1-8b-instant",
     "Qwen/Qwen2.5-7B-Instruct",
-    "Qwen/Qwen2.5-7B-Instruct-Turbo",
 ]
 
 N_BOOTSTRAP = 10_000

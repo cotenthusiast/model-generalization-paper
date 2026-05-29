@@ -11,10 +11,6 @@ dependencies = [
     "numpy",
     "scipy",
     "datasets",
-    "python-dotenv",
-    "openai",
-    "google-genai",
-    "groq",
     "pyyaml",
 ]
 

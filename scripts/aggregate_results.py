@@ -18,20 +18,13 @@ METHOD_ORDER = [
     "pride",
 ]
 
+# add models here as experiments are run
 MODEL_ORDER = [
-    "gpt-4.1-mini",
-    "gemini-2.5-flash",
-    "llama-3.1-8b-instant",
     "Qwen/Qwen2.5-7B-Instruct",
-    "Qwen/Qwen2.5-7B-Instruct-Turbo",
 ]
 
 MODEL_DISPLAY = {
-    "gpt-4.1-mini": "GPT-4.1-mini",
-    "gemini-2.5-flash": "Gemini-2.5-Flash",
-    "llama-3.1-8b-instant": "Llama-3.1-8B",
     "Qwen/Qwen2.5-7B-Instruct": "Qwen 2.5 7B",
-    "Qwen/Qwen2.5-7B-Instruct-Turbo": "Qwen 2.5 7B Turbo",
 }
 
 METHOD_DISPLAY = {
