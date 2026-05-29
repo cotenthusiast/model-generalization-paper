@@ -17,7 +17,7 @@
 #   sinfo -o "%P %D %G %m %l %N"
 #
 # Usage:
-#   CONFIG=config/small_batch.yaml sbatch slurm/run_kelvin2_a100mig_40gb.sh
+#   CONFIG=config/small_batch.yaml sbatch slurm/05_run_config.sh
 #
 #SBATCH --job-name=mcqgen_a100mig
 #SBATCH --output=logs/a100mig_%j.out
@@ -52,7 +52,7 @@ source "$VENV_DIR/bin/activate"
 
 if [[ -z "${CONFIG:-}" ]]; then
     echo "ERROR: CONFIG environment variable is not set." >&2
-    echo "Usage: CONFIG=config/small_batch.yaml sbatch slurm/run_kelvin2_a100mig_40gb.sh" >&2
+    echo "Usage: CONFIG=config/small_batch.yaml sbatch slurm/05_run_config.sh" >&2
     exit 1
 fi
 
