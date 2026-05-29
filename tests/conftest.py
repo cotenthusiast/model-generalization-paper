@@ -7,7 +7,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from twoprompt.config.experiment import (
+from modelgen.config.experiment import (
     MMLU_QUESTIONS_PER_SUBJECT,
     REVIEW_SUBJECTS,
     ROBUSTNESS_SUBJECTS,

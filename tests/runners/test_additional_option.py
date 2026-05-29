@@ -2,10 +2,10 @@
 
 from pathlib import Path
 
-from twoprompt.backends.dummy import DummyBackend
-from twoprompt.parsing.parser import parse_model_answer
-from twoprompt.parsing.types import PARSE_OK
-from twoprompt.runners.additional_option import AdditionalOptionRunner
+from modelgen.backends.dummy import DummyBackend
+from modelgen.parsing.parser import parse_model_answer
+from modelgen.parsing.types import PARSE_OK
+from modelgen.runners.additional_option import AdditionalOptionRunner
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _PROMPTS_DIR = REPO_ROOT / "prompts"

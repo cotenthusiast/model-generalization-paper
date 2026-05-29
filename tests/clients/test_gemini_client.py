@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock
 
 from google.genai import errors
 
-from twoprompt.clients.gemini_client import GeminiClient
-from twoprompt.clients.types import (
+from modelgen.clients.gemini_client import GeminiClient
+from modelgen.clients.types import (
     ModelRequest,
     RequestMetadata,
     ProviderResponseError,

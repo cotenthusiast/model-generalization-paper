@@ -2,10 +2,10 @@
 
 from pathlib import Path
 
-from twoprompt.backends.dummy import DummyBackend
-from twoprompt.runners.two_stage import TwoStageRunner
-from twoprompt.scoring.types import SCORE_CORRECT, SCORE_INCORRECT, SCORE_UNSCORABLE
-from twoprompt.parsing.types import PARSE_OK, PARSE_MISSING
+from modelgen.backends.dummy import DummyBackend
+from modelgen.runners.two_stage import TwoStageRunner
+from modelgen.scoring.types import SCORE_CORRECT, SCORE_INCORRECT, SCORE_UNSCORABLE
+from modelgen.parsing.types import PARSE_OK, PARSE_MISSING
 
 from tests.runners.conftest import ErrorBackend
 

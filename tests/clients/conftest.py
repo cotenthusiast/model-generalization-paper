@@ -2,7 +2,7 @@
 
 import pytest
 
-from twoprompt.clients.types import (
+from modelgen.clients.types import (
     SUCCESS_STATUS,
     FAILURE_STATUS,
     ErrorInfo,

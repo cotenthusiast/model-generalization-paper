@@ -32,7 +32,7 @@ slurm/
   04_full_run.sh               full-scale run job
   05_run_config.sh             reusable A100 MIG job; pass CONFIG= at submit time
 
-src/twoprompt/
+src/modelgen/
   backends/
     base.py                    abstract backend interface
     hf_causal_lm.py            shared HuggingFace CausalLM backend (generate + score_options)
@@ -95,7 +95,7 @@ reports/                       evaluate_run.py and aggregate_results.py outputs 
 
 ## Configuration
 
-All run configuration lives in `config/*.yaml`. The Python modules under `src/twoprompt/config/` define constants and should not be edited for ordinary experiment configuration.
+All run configuration lives in `config/*.yaml`. The Python modules under `src/modelgen/config/` define constants and should not be edited for ordinary experiment configuration.
 
 **Schema** (`config/tiny_real.yaml` is the canonical reference):
 

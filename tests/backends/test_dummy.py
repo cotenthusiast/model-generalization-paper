@@ -2,8 +2,8 @@
 
 import pytest
 
-from twoprompt.backends.dummy import DummyBackend
-from twoprompt.backends.types import (
+from modelgen.backends.dummy import DummyBackend
+from modelgen.backends.types import (
     LocalGenerationConfig,
     ModelGenerationResult,
     ModelOptionScoreResult,

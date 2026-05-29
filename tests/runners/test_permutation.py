@@ -2,11 +2,11 @@
 
 from pathlib import Path
 
-from twoprompt.backends.dummy import DummyBackend
-from twoprompt.runners.permutation import PermutationRunner
-from twoprompt.pipeline.prompt_builder import load_prompt_templates
-from twoprompt.scoring.types import SCORE_CORRECT, SCORE_INCORRECT
-from twoprompt.parsing.types import PARSE_OK, PARSE_MISSING
+from modelgen.backends.dummy import DummyBackend
+from modelgen.runners.permutation import PermutationRunner
+from modelgen.pipeline.prompt_builder import load_prompt_templates
+from modelgen.scoring.types import SCORE_CORRECT, SCORE_INCORRECT
+from modelgen.parsing.types import PARSE_OK, PARSE_MISSING
 
 from tests.runners.conftest import ErrorBackend
 

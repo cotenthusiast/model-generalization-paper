@@ -17,8 +17,8 @@ torch = pytest.importorskip(
 
 from unittest.mock import MagicMock, patch
 
-from twoprompt.backends.hf_causal_lm import HFCausalLMBackend
-from twoprompt.backends.types import (
+from modelgen.backends.hf_causal_lm import HFCausalLMBackend
+from modelgen.backends.types import (
     LocalGenerationConfig,
     ModelGenerationResult,
     ModelOptionScoreResult,

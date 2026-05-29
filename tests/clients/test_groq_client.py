@@ -6,8 +6,8 @@ import groq
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from twoprompt.clients.groq_client import GroqClient
-from twoprompt.clients.types import (
+from modelgen.clients.groq_client import GroqClient
+from modelgen.clients.types import (
     ModelRequest,
     RequestMetadata,
     ProviderResponseError,

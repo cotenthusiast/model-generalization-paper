@@ -1,7 +1,7 @@
 # Two-prompt research — runtime configuration (local model / HPC)
 #
 # Edit this file to change what gets run or add new models.
-# The Python modules in src/twoprompt/config/ should not be edited
+# The Python modules in src/modelgen/config/ should not be edited
 # for run configuration.
 
 # ---------------------------------------------------------------------------
