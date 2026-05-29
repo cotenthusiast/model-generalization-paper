@@ -20,9 +20,8 @@ from modelgen.scoring.types import ScoreResult
 class LocalExperimentRunner(ABC):
     """Abstract base for local-model experiment runners.
 
-    Mirrors ExperimentRunner (cloud) but uses LocalBackend instead of BaseClient.
-    Synchronous — no asyncio. Produces the same CSV column schema as ExperimentRunner
-    so evaluate_run.py can process runs from both cloud and local backends.
+    Uses LocalBackend for synchronous inference. Produces the CSV column schema
+    expected by evaluate_run.py.
     """
 
     def __init__(
@@ -87,7 +86,7 @@ class LocalExperimentRunner(ABC):
         score_result: ScoreResult | None,
         error: str | None = None,
     ) -> dict:
-        """Assemble a flat result dict matching the cloud ExperimentRunner column schema."""
+        """Assemble a flat result dict for one question."""
         meta = self.backend.metadata
         cfg = self.generation_config
         is_success = generation_result is not None and error is None
