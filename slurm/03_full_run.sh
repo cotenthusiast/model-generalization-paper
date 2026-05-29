@@ -1,4 +1,21 @@
 #!/bin/bash
+# Kelvin2-specific execution script.
+# This file is committed intentionally so experiment runs are reproducible.
+# It assumes the repo is cloned to:
+#   /mnt/scratch2/users/$USER/repos/model-generalization
+# It assumes the project venv exists at:
+#   /mnt/scratch2/users/$USER/venvs/mcq-generalization
+# It assumes Hugging Face cache/token/model files live under:
+#   /mnt/scratch2/users/$USER/hf
+# Do not put secrets or tokens in this script.
+# HF authentication should be done with:
+#   hf auth login
+#
+# GPU resource note:
+# This script uses a full Kelvin2 A100 for large-scale production runs.
+# Verify available partitions with:
+#   sinfo -o "%P %D %G %m %l %N"
+#
 #SBATCH --job-name=mcqgen_full
 #SBATCH --output=logs/full_%j.out
 #SBATCH --error=logs/full_%j.err
@@ -9,8 +26,6 @@
 #SBATCH --mem=80G
 #SBATCH --partition=k2-gpu-a100
 #SBATCH --gres=gpu:a100:1
-# TODO: verify partition and GRES with `sinfo` on the Kelvin2 login node before submitting.
-#
 # H100 alternative (higher memory, useful for 32B/70B/72B models):
 # #SBATCH --partition=k2-gpu-h100
 # #SBATCH --gres=gpu:h100:1
@@ -20,7 +35,8 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# BASH_SOURCE/dirname resolves incorrectly in Kelvin2's SLURM execution environment.
+REPO_ROOT="/mnt/scratch2/users/$USER/repos/model-generalization"
 cd "$REPO_ROOT"
 
 mkdir -p logs
@@ -33,7 +49,7 @@ export HF_HUB_CACHE="$HF_HOME/hub"
 export MODEL_ROOT="$SCRATCH/models"
 export RESULTS_DIR="$SCRATCH/results/mcq-generalization"
 
-module load apps/python3/3.12.4/gcc-14.1.0
+module load python3/3.10.5/gcc-9.3.0
 
 source "$VENV_DIR/bin/activate"
 
