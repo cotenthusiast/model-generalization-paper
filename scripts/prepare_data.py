@@ -6,17 +6,17 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from twoprompt.benchmarks.split import build_all_splits
-from twoprompt.config.experiment import ROBUSTNESS_TRACK_NAME, REVIEW_TRACK_NAME
-from twoprompt.config.paths import (
+from modelgen.benchmarks.split import build_all_splits
+from modelgen.config.experiment import ROBUSTNESS_TRACK_NAME, REVIEW_TRACK_NAME
+from modelgen.config.paths import (
     NORMALIZED_QUESTIONS_FILENAME,
     NORMALIZED_QUESTIONS_PATH,
     PROCESSED_DIR,
     RAW_QUESTIONS_PATH,
     SPLITS_DIR,
 )
-from twoprompt.io.readers import read_normalized_questions
-from twoprompt.io.writers import (
+from modelgen.io.readers import read_normalized_questions
+from modelgen.io.writers import (
     write_group_splits,
     write_normalized_questions,
     write_raw_questions,
@@ -52,7 +52,7 @@ def _download_arc_raw(output_path: Path) -> None:
 
 def _normalize_arc(raw_path: Path, normalized_path: Path) -> None:
     import json
-    from twoprompt.benchmarks.arc import build_normalized_dataframe
+    from modelgen.benchmarks.arc import build_normalized_dataframe
     df_raw = pd.read_csv(raw_path)
     df_raw["choices"] = df_raw["choices"].apply(json.loads)
     df_normalized = build_normalized_dataframe(df_raw)

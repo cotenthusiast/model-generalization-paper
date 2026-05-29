@@ -2,7 +2,7 @@
 
 import pytest
 
-from twoprompt.backends.types import (
+from modelgen.backends.types import (
     LocalGenerationConfig,
     LocalModelMetadata,
     ModelGenerationResult,

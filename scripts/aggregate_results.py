@@ -6,8 +6,8 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-from twoprompt.config.experiment import BASELINE_METHOD
-from twoprompt.config.paths import REPORTS_DIR
+from modelgen.config.experiment import BASELINE_METHOD
+from modelgen.config.paths import REPORTS_DIR
 
 _ROOT = Path(__file__).resolve().parents[1]
 

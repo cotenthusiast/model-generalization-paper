@@ -20,17 +20,17 @@ from pathlib import Path
 
 import yaml
 
-from twoprompt.backends import HFCausalLMBackend, LocalGenerationConfig
-from twoprompt.backends.dummy import DummyBackend
-from twoprompt.infra.checkpoint import CheckpointManager
-from twoprompt.io.readers import read_normalized_questions, read_split_ids
-from twoprompt.io.writers import write_run_results
-from twoprompt.runners.additional_option import AdditionalOptionRunner
-from twoprompt.runners.calibration import AnswerCalibrationRunner
-from twoprompt.runners.direct_mcq import DirectMCQRunner
-from twoprompt.runners.permutation import PermutationRunner
-from twoprompt.runners.pride import PriDeRunner
-from twoprompt.runners.two_stage import TwoStageRunner
+from modelgen.backends import HFCausalLMBackend, LocalGenerationConfig
+from modelgen.backends.dummy import DummyBackend
+from modelgen.infra.checkpoint import CheckpointManager
+from modelgen.io.readers import read_normalized_questions, read_split_ids
+from modelgen.io.writers import write_run_results
+from modelgen.runners.additional_option import AdditionalOptionRunner
+from modelgen.runners.calibration import AnswerCalibrationRunner
+from modelgen.runners.direct_mcq import DirectMCQRunner
+from modelgen.runners.permutation import PermutationRunner
+from modelgen.runners.pride import PriDeRunner
+from modelgen.runners.two_stage import TwoStageRunner
 
 ROOT = Path(__file__).resolve().parents[1]
 

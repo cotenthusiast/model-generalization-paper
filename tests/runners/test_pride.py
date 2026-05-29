@@ -4,8 +4,8 @@ import json
 import logging
 from pathlib import Path
 
-from twoprompt.backends.dummy import DummyBackend
-from twoprompt.runners.pride import PriDeRunner
+from modelgen.backends.dummy import DummyBackend
+from modelgen.runners.pride import PriDeRunner
 
 from tests.runners.conftest import ErrorScoreBackend
 
@@ -106,7 +106,7 @@ class TestPriDeRunnerIntegration:
         b.load()
         runner = _make_runner(b, tmp_path)
 
-        with caplog.at_level(logging.WARNING, logger="twoprompt.runners.pride"):
+        with caplog.at_level(logging.WARNING, logger="modelgen.runners.pride"):
             rows = runner.run_many([runner_question_row])
 
         assert rows[0]["pride_adjusted_choice"] is None

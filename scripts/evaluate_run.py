@@ -9,15 +9,15 @@ import pandas as pd
 import yaml
 from scipy.stats import beta as _beta_dist
 
-from twoprompt.config.experiment import (
+from modelgen.config.experiment import (
     BASELINE_METHOD,
     PRIDE_METHOD,
     TWOPROMPT_METHOD,
     TWOPROMPT_CYCLIC_METHOD,
 )
-from twoprompt.config.paths import REPORTS_DIR, RUNS_DIR
-from twoprompt.parsing.parser import parse_model_answer
-from twoprompt.scoring.scorer import score_prediction
+from modelgen.config.paths import REPORTS_DIR, RUNS_DIR
+from modelgen.parsing.parser import parse_model_answer
+from modelgen.scoring.scorer import score_prediction
 
 _ROOT = Path(__file__).resolve().parents[1]
 

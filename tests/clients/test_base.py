@@ -2,8 +2,8 @@
 
 import pytest
 
-from twoprompt.clients.base import BaseClient
-from twoprompt.clients.types import (
+from modelgen.clients.base import BaseClient
+from modelgen.clients.types import (
     ErrorInfo,
     FAILURE_STATUS,
     ModelRequest,

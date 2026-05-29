@@ -2,7 +2,7 @@
 
 import pytest
 
-from twoprompt.clients.types import (
+from modelgen.clients.types import (
     RequestValidationError,
     ResponseValidationError,
 )

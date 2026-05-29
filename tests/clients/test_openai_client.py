@@ -6,8 +6,8 @@ import openai
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from twoprompt.clients.openai_client import OpenAIClient
-from twoprompt.clients.types import (
+from modelgen.clients.openai_client import OpenAIClient
+from modelgen.clients.types import (
     ModelRequest,
     RequestMetadata,
     ProviderResponseError,

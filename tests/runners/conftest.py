@@ -2,9 +2,9 @@
 
 import pytest
 
-from twoprompt.backends.dummy import DummyBackend
-from twoprompt.backends.base import LocalBackend
-from twoprompt.backends.types import LocalGenerationConfig, ModelGenerationResult
+from modelgen.backends.dummy import DummyBackend
+from modelgen.backends.base import LocalBackend
+from modelgen.backends.types import LocalGenerationConfig, ModelGenerationResult
 
 
 class ErrorBackend(DummyBackend):

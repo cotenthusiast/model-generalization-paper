@@ -4,8 +4,8 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from twoprompt.infra.cache import _cache_key, ResponseCache, CachingClientWrapper
-from twoprompt.clients.types import (
+from modelgen.infra.cache import _cache_key, ResponseCache, CachingClientWrapper
+from modelgen.clients.types import (
     ModelRequest,
     ModelResponse,
     RequestMetadata,

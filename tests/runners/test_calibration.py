@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from twoprompt.backends.dummy import DummyBackend
-from twoprompt.runners.calibration import AnswerCalibrationRunner
+from modelgen.backends.dummy import DummyBackend
+from modelgen.runners.calibration import AnswerCalibrationRunner
 
 from tests.runners.conftest import ErrorScoreBackend
 
@@ -86,7 +86,7 @@ class TestAnswerCalibrationRunnerIntegration:
         b.load()
         runner = _make_runner(b)
 
-        with caplog.at_level(logging.WARNING, logger="twoprompt.runners.calibration"):
+        with caplog.at_level(logging.WARNING, logger="modelgen.runners.calibration"):
             rows = runner.run_many([runner_question_row])
 
         assert rows[0]["calibration_adjusted_choice"] is None

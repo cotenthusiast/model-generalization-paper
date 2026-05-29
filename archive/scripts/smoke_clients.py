@@ -2,11 +2,11 @@
 
 import asyncio
 
-from twoprompt.clients.gemini_client import GeminiClient
-from twoprompt.clients.groq_client import GroqClient
-from twoprompt.clients.openai_client import OpenAIClient
-from twoprompt.clients.types import ModelRequest, RequestMetadata
-from twoprompt.config.models import (
+from modelgen.clients.gemini_client import GeminiClient
+from modelgen.clients.groq_client import GroqClient
+from modelgen.clients.openai_client import OpenAIClient
+from modelgen.clients.types import ModelRequest, RequestMetadata
+from modelgen.config.models import (
     GEMINI_CORE_MODEL,
     GROQ_CORE_MODEL,
     OPENAI_CORE_MODEL,

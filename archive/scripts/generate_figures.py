@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from twoprompt.config.paths import REPORTS_DIR
+from modelgen.config.paths import REPORTS_DIR
 
 _ROOT = Path(__file__).resolve().parents[1]
 
