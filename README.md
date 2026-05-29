@@ -130,7 +130,7 @@ Reports written to `reports/<RUN_ID>/<benchmark>/`.
 
 ---
 
-## HPC Setup (Kelvin2)
+## HPC Setup and Kelvin2 Run Ladder
 
 Experiments run on Kelvin2 (Queen's University Belfast) via SLURM batch jobs. SLURM scripts live in `slurm/` and invoke `scripts/run_experiment.py`. Python code has no SLURM dependency.
 
@@ -139,8 +139,8 @@ Experiments run on Kelvin2 (Queen's University Belfast) via SLURM batch jobs. SL
 ```bash
 # 1. Clone repo into scratch (home quota is too small for outputs)
 cd /mnt/scratch2/users/$USER
-git clone <repo-url> mcq-generalization
-cd mcq-generalization
+git clone <repo-url> repos/model-generalization
+cd repos/model-generalization
 
 # 2. Create venv on scratch (not home — home quota is 50GB)
 python3 -m venv /mnt/scratch2/users/$USER/venvs/mcq-generalization
@@ -151,29 +151,78 @@ pip install -e ".[dev,local]"
 
 # 4. Copy benchmark data from local machine
 #    (data/ is gitignored — run scp from your laptop)
-#    scp -r data/ <user>@kelvin2.alces.network:/mnt/scratch2/users/$USER/mcq-generalization/
+#    scp -r data/ <user>@kelvin2.alces.network:/mnt/scratch2/users/$USER/repos/model-generalization/
 
 # 5. Authenticate with HuggingFace (needed for Llama models)
-#    HF_HOME and HF_HUB_CACHE are set inside each SLURM script automatically
-huggingface-cli login
-
-# 6. Download tiny model first to verify everything works
-bash slurm/01_download_models.sh
-
-# 7. Smoke test — verify imports, dry-run, and real dummy execution (no GPU needed)
-sbatch slurm/00_smoke_test.sh
-
-# 8. Tiny real run — 5 questions, Qwen 0.5B, confirms weights load correctly
-sbatch slurm/02_tiny_real.sh
-
-# 9. Small batch — 20 questions, Qwen 7B + Llama 8B, all methods
-sbatch slurm/02_small_batch.sh
-
-# 10. Full run — only after small batch looks correct
-sbatch slurm/03_full_run.sh
+#    Do NOT put the HF token in .env — use hf auth login interactively instead.
+#    HF_HOME and HF_HUB_CACHE are set inside each SLURM script automatically.
+hf auth login
 ```
 
-Verify the correct partition and GRES names with `sinfo` on the login node before submitting GPU jobs — partition names in `slurm/02_small_batch.sh` and `slurm/03_full_run.sh` are placeholders.
+**Run ladder (after first-time setup):**
+
+```bash
+# SSH into Kelvin2, then:
+cd /mnt/scratch2/users/$USER/repos/model-generalization
+
+# If the local repo has changed since last session:
+git pull
+# If Kelvin2 has local emergency edits that conflict and GitHub now has the fixes:
+# git reset --hard && git pull
+
+# Load environment (sets HF_HOME, PYTHONPATH, venv activation, etc.)
+source scripts/env_kelvin2.sh
+
+# Syntax-check all SLURM scripts before submitting anything
+bash -n slurm/*.sh
+
+# Confirm benchmark data is present and parseable
+PYTHONPATH=src python scripts/prepare_data.py
+
+# Confirm model weights are available (download if needed)
+hf download Qwen/Qwen2.5-0.5B-Instruct
+hf download Qwen/Qwen2.5-7B-Instruct
+
+# Confirm dummy backend runs end-to-end without GPU
+PYTHONPATH=src python scripts/run_experiment.py --config config/dummy.yaml --yes
+
+# Tiny real run — 5 questions, Qwen 7B, no two_prompt, confirms weights load on GPU
+sbatch --export=CONFIG=config/tiny_qwen7b_mmlu.yaml slurm/05_run_config.sh
+
+# Monitor the job
+squeue -u $USER
+sacct -j JOBID --format=JobID,JobName,Partition,State,ExitCode,Elapsed,MaxRSS
+cat logs/*JOBID*.out
+cat logs/*JOBID*.err
+
+# Inspect output CSVs once the job finishes
+ls runs/
+
+# After tiny run passes, submit core configs (cheap — no two_prompt)
+sbatch --export=CONFIG=config/qwen7b_mmlu_core.yaml    slurm/05_run_config.sh
+sbatch --export=CONFIG=config/qwen7b_arc_core.yaml     slurm/05_run_config.sh
+
+# After core configs pass, submit expensive configs (two_prompt + cyclic + pride)
+sbatch --export=CONFIG=config/qwen7b_mmlu_expensive.yaml slurm/05_run_config.sh
+sbatch --export=CONFIG=config/qwen7b_arc_expensive.yaml  slurm/05_run_config.sh
+```
+
+**Notes:**
+
+- Do not run heavy jobs on the login node — use `sbatch` to submit to the compute queue.
+- Do not put HF tokens in `.env` — use `hf auth login` interactively on the login node.
+- If Kelvin2 has local emergency edits and GitHub now has the fixes: `git reset --hard` then `git pull`.
+
+**Future larger models:**
+
+| Model size | Partition | GRES | Notes |
+|---|---|---|---|
+| 7B | `k2-gpu-a100mig` | `gpu:a100mig_3g.40gb:1` | Current target |
+| 32B | `k2-gpu-a100` | `gpu:a100:1` | Full 80GB A100 |
+| 72B / H100 | `k2-gpu-h100` | `gpu:h100:1` | H100 for larger models |
+| 32B+ quantized | `k2-gpu-a100` | `gpu:a100:1` | May need multi-GPU or 4-bit quant |
+
+Verify partition and GRES names with `sinfo` on the login node before submitting — names above reflect current Kelvin2 config but may change.
 
 ---
 

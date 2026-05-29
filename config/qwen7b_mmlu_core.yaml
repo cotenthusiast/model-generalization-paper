@@ -1,13 +1,13 @@
-# Tiny real config — first end-to-end test with actual model weights.
-# Uses Qwen 0.5B (smallest available), 5 questions, minimal method set.
-# Run after downloading weights with slurm/01_download_models.sh.
-# Run with: python scripts/run_experiment.py --config config/tiny_real.yaml
+# Qwen 7B core config — MMLU, 1000 questions.
+# Methods: baseline, calibration, additional_option only (no two_prompt; max_tokens: 64 is safe).
+# Run after tiny_qwen7b_mmlu.yaml passes.
+# Run with: python scripts/run_experiment.py --config config/qwen7b_mmlu_core.yaml
 
 models:
-  Qwen/Qwen2.5-0.5B-Instruct:
-    model_path: Qwen/Qwen2.5-0.5B-Instruct
+  Qwen/Qwen2.5-7B-Instruct:
+    model_path: Qwen/Qwen2.5-7B-Instruct
     family: qwen
-    size_label: 0.5B
+    size_label: 7B
     device: auto
 
 run:
@@ -16,17 +16,17 @@ run:
   seed: 42
   prompt_version: "v1"
 
-  max_questions: 5
+  max_questions: 1000
 
-  checkpoint_every_n: 5
+  checkpoint_every_n: 50
 
-  pride_calibration_n: 2
+  pride_calibration_n: 50
   pride_calibration_seed: 42
 
   fallback_on_parse_failure: false
 
   jobs:
-    - model: Qwen/Qwen2.5-0.5B-Instruct
+    - model: Qwen/Qwen2.5-7B-Instruct
       methods: [baseline, calibration, additional_option]
       benchmark: mmlu
       split: robustness
