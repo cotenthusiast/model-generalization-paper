@@ -16,25 +16,19 @@
 # Verify available partitions with:
 #   sinfo -o "%P %D %G %m %l %N"
 #
-#SBATCH --job-name=mcqgen_tiny
-#SBATCH --output=logs/tiny_%j.out
-#SBATCH --error=logs/tiny_%j.err
-#SBATCH --time=00:30:00
+# Usage:
+#   CONFIG=config/small_batch.yaml sbatch slurm/run_kelvin2_a100mig_40gb.sh
+#
+#SBATCH --job-name=mcqgen_a100mig
+#SBATCH --output=logs/a100mig_%j.out
+#SBATCH --error=logs/a100mig_%j.err
+#SBATCH --time=12:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=80G
 #SBATCH --partition=k2-gpu-a100mig
 #SBATCH --gres=gpu:3g.40gb:1
-# Full A100 alternative (for larger models):
-# #SBATCH --partition=k2-gpu-a100
-# #SBATCH --gres=gpu:a100:1
-# H100 alternative (higher memory):
-# #SBATCH --partition=k2-gpu-h100
-# #SBATCH --gres=gpu:h100:1
-#
-# First real-model run. Uses Qwen 0.5B, 5 questions, 3 methods.
-# Run this before slurm/02_small_batch.sh to confirm weights load correctly.
 
 set -euo pipefail
 
@@ -56,12 +50,19 @@ module load python3/3.10.5/gcc-9.3.0
 
 source "$VENV_DIR/bin/activate"
 
+if [[ -z "${CONFIG:-}" ]]; then
+    echo "ERROR: CONFIG environment variable is not set." >&2
+    echo "Usage: CONFIG=config/small_batch.yaml sbatch slurm/run_kelvin2_a100mig_40gb.sh" >&2
+    exit 1
+fi
+
 echo "Job ID:  $SLURM_JOB_ID"
 echo "Node:    $SLURMD_NODENAME"
 echo "GPU:     ${CUDA_VISIBLE_DEVICES:-none}"
 echo "Python:  $(python --version)"
 echo "Repo:    $REPO_ROOT"
+echo "Config:  $CONFIG"
 
-python scripts/run_experiment.py --config config/tiny_real.yaml --yes
+python scripts/run_experiment.py --config "$CONFIG" --yes
 
-echo "Tiny real run complete."
+echo "Run complete."
