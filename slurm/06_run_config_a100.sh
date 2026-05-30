@@ -12,23 +12,24 @@
 #   hf auth login
 #
 # GPU resource note:
-# This script uses Kelvin2 A100 MIG 3g.40gb for small/medium local-model runs such as Qwen 7B.
+# This script uses a full Kelvin2 A100 (80GB) for larger models such as Qwen 32B.
+# For 70B/72B models this may not be sufficient — monitor memory usage on first run.
 # Verify available partitions with:
 #   sinfo -o "%P %D %G %m %l %N"
 #
 # Usage:
-#   CONFIG=config/small_batch.yaml sbatch slurm/05_run_config.sh
+#   CONFIG=config/small_batch.yaml sbatch slurm/06_run_config_a100.sh
 #
-#SBATCH --job-name=mcqgen_a100mig
-#SBATCH --output=logs/a100mig_%j.out
-#SBATCH --error=logs/a100mig_%j.err
+#SBATCH --job-name=mcqgen_a100
+#SBATCH --output=logs/a100_%j.out
+#SBATCH --error=logs/a100_%j.err
 #SBATCH --time=24:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=80G
-#SBATCH --partition=k2-gpu-a100mig
-#SBATCH --gres=gpu:3g.40gb:1
+#SBATCH --partition=k2-gpu-a100
+#SBATCH --gres=gpu:a100:1
 
 set -euo pipefail
 
@@ -52,7 +53,7 @@ source "$VENV_DIR/bin/activate"
 
 if [[ -z "${CONFIG:-}" ]]; then
     echo "ERROR: CONFIG environment variable is not set." >&2
-    echo "Usage: CONFIG=config/small_batch.yaml sbatch slurm/05_run_config.sh" >&2
+    echo "Usage: CONFIG=config/small_batch.yaml sbatch slurm/06_run_config_a100.sh" >&2
     exit 1
 fi
 
