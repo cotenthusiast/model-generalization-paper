@@ -64,6 +64,10 @@ echo "Python:  $(python --version)"
 echo "Repo:    $REPO_ROOT"
 echo "Config:  $CONFIG"
 
-python scripts/run_experiment.py --config "$CONFIG" --yes
+if [[ -n "${RUN_ID:-}" ]]; then
+    python scripts/run_experiment.py --config "$CONFIG" --run-id "$RUN_ID" --yes
+else
+    python scripts/run_experiment.py --config "$CONFIG" --yes
+fi
 
 echo "Run complete."
