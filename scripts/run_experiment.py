@@ -458,7 +458,7 @@ def main() -> None:
     prompt_src = paths["prompts_dir"] / prompt_version
     prompt_dst = run_dir / "prompts" / prompt_version
     if prompt_src.exists() and not prompt_dst.exists():
-        shutil.copytree(prompt_src, prompt_dst)
+        shutil.copytree(prompt_src, prompt_dst, dirs_exist_ok=True)
     logger.info("Snapshotted config and prompts/%s → %s", prompt_version, run_dir)
 
     max_questions = run_cfg.get("max_questions") or None
