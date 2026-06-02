@@ -1,0 +1,5 @@
+Answer the following question based on your knowledge.
+
+Question: {question}
+
+Respond with a concise answer phrase. Include enough detail to distinguish the answer from similar alternatives. Do not explain your reasoning.

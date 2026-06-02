@@ -1,0 +1,16 @@
+You are given a question, a reference answer, and four options.
+
+Question: {question}
+
+Reference answer: {free_text}
+
+Options:
+A. {option_a}
+B. {option_b}
+C. {option_c}
+D. {option_d}
+
+Choose the option that is semantically closest to the reference answer in the context of the question.
+Prioritize meaning over exact wording.
+If the reference answer is incomplete, ambiguous, or phrased differently from the options, choose the option most consistent with it.
+Respond with only A, B, C, or D.
