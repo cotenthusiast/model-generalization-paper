@@ -2,32 +2,23 @@
 
 from typing import Any
 
+from sentence_transformers import SentenceTransformer
+
 from modelgen.parsing.parser import normalize_output_text
 from modelgen.parsing.types import PARSE_MISSING, PARSE_OK, ParseResult
 from modelgen.pipeline.prompt_builder import build_text_extraction_prompt
 from modelgen.runners.local_base import LocalExperimentRunner
 
-
-def _token_jaccard(text_a: str, text_b: str) -> float:
-    """Token-set Jaccard similarity between two strings.
-
-    Placeholder similarity metric: can be replaced with sentence-transformer
-    cosine similarity for stronger semantic matching without changing the
-    runner interface.
-    """
-    tokens_a = set(text_a.lower().split())
-    tokens_b = set(text_b.lower().split())
-    if not tokens_a and not tokens_b:
-        return 1.0
-    if not tokens_a or not tokens_b:
-        return 0.0
-    return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
+# all-MiniLM-L6-v2: 22M params, fast on CPU, strong for short texts;
+# swap via embedding_model kwarg if a larger model is needed
+_DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 
 def match_free_text_to_options(
     free_text: str,
     options: dict[str, str],
     similarity_threshold: float,
+    model: SentenceTransformer,
 ) -> tuple[ParseResult, float | None]:
     """Deterministically select the best-matching option for a free-text answer.
 
@@ -47,10 +38,22 @@ def match_free_text_to_options(
             reason="Empty free-text response",
         ), None
 
-    scores = {
-        letter: _token_jaccard(normalized_ft, normalize_output_text(text))
-        for letter, text in options.items()
-    }
+    letters = list(options.keys())
+    option_texts = [normalize_output_text(options[l]) for l in letters]
+
+    # Encode free text and all options in one batch; normalize for cosine sim
+    embeddings = model.encode(
+        [normalized_ft] + option_texts,
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+    )
+    ft_emb = embeddings[0]
+    opt_embs = embeddings[1:]
+
+    # Dot product of L2-normalized vectors equals cosine similarity
+    raw_sims = opt_embs @ ft_emb
+    scores = {letter: float(raw_sims[i]) for i, letter in enumerate(letters)}
+
     best_letter = max(scores, key=scores.__getitem__)
     best_score = scores[best_letter]
 
@@ -68,21 +71,29 @@ def match_free_text_to_options(
         status=PARSE_OK,
         raw_text=free_text,
         normalized_text=normalized_ft,
-        reason=f"Token-Jaccard match to option {best_letter} (score={best_score:.3f})",
+        reason=f"Embedding cosine match to option {best_letter} (score={best_score:.3f})",
     ), best_score
 
 
 class TextExtractionRunner(LocalExperimentRunner):
     """Runner for the text-extraction condition.
 
-    Stage 1 elicits a free-text answer without exposing option labels.
-    Stage 2 deterministically selects the best-matching option using
-    token-Jaccard similarity — no second LLM call.
+    Stage 1 shows all four options with A/B/C/D labels and instructs the
+    model not to state the answer letter. Stage 2 deterministically selects
+    the best-matching option using sentence-embedding cosine similarity —
+    no second LLM call.
     """
 
-    def __init__(self, *args, similarity_threshold: float = 0.1, **kwargs) -> None:
+    def __init__(
+        self,
+        *args,
+        similarity_threshold: float = 0.1,
+        embedding_model: str = _DEFAULT_EMBEDDING_MODEL,
+        **kwargs,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._similarity_threshold = similarity_threshold
+        self._st_model = SentenceTransformer(embedding_model)
 
     def run_one(self, question_row: Any, sample_index: int) -> dict:
         prompt = build_text_extraction_prompt(
@@ -104,6 +115,7 @@ class TextExtractionRunner(LocalExperimentRunner):
                 generation_result.raw_text,
                 self._build_options(question_row),
                 self._similarity_threshold,
+                self._st_model,
             )
             score_result = self._score(parsed_result, question_row["correct_option"])
 

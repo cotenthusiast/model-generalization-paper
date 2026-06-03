@@ -12,6 +12,7 @@ dependencies = [
     "scipy",
     "datasets",
     "pyyaml",
+    "sentence-transformers",
 ]
 
 [project.optional-dependencies]

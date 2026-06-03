@@ -7,6 +7,12 @@ from modelgen.backends.base import LocalBackend
 from modelgen.backends.types import LocalGenerationConfig, ModelGenerationResult
 
 
+@pytest.fixture(scope="session")
+def sentence_model():
+    from sentence_transformers import SentenceTransformer
+    return SentenceTransformer("all-MiniLM-L6-v2")
+
+
 class ErrorBackend(DummyBackend):
     """DummyBackend that raises RuntimeError on generate()."""
 

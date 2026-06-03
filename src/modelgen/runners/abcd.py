@@ -2,9 +2,11 @@
 
 from typing import Any
 
+from sentence_transformers import SentenceTransformer
+
 from modelgen.pipeline.prompt_builder import build_abcd_prompt
 from modelgen.runners.local_base import LocalExperimentRunner
-from modelgen.runners.text_extraction import match_free_text_to_options
+from modelgen.runners.text_extraction import _DEFAULT_EMBEDDING_MODEL, match_free_text_to_options
 
 
 class ABCDRunner(LocalExperimentRunner):
@@ -13,14 +15,21 @@ class ABCDRunner(LocalExperimentRunner):
     Stage 1 presents all four options under neutral dash labels instead of
     A/B/C/D letter labels, eliciting a free-text answer free of positional
     letter cues. Stage 2 deterministically selects the best-matching option
-    using token-Jaccard similarity — no second LLM call.
+    using sentence-embedding cosine similarity — no second LLM call.
 
     The stage-2 matching logic is identical to TextExtractionRunner.
     """
 
-    def __init__(self, *args, similarity_threshold: float = 0.1, **kwargs) -> None:
+    def __init__(
+        self,
+        *args,
+        similarity_threshold: float = 0.1,
+        embedding_model: str = _DEFAULT_EMBEDDING_MODEL,
+        **kwargs,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._similarity_threshold = similarity_threshold
+        self._st_model = SentenceTransformer(embedding_model)
 
     def run_one(self, question_row: Any, sample_index: int) -> dict:
         prompt = build_abcd_prompt(
@@ -42,6 +51,7 @@ class ABCDRunner(LocalExperimentRunner):
                 generation_result.raw_text,
                 self._build_options(question_row),
                 self._similarity_threshold,
+                self._st_model,
             )
             score_result = self._score(parsed_result, question_row["correct_option"])
 

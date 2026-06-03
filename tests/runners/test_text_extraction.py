@@ -30,33 +30,33 @@ def _make_runner(backend, similarity_threshold=0.1):
 class TestMatchFreeTextToOptions:
     """Unit tests for the deterministic matching helper."""
 
-    def test_exact_match_correct(self, canonical_options):
-        result, score = match_free_text_to_options("HTTPS", canonical_options, 0.1)
+    def test_exact_match_correct(self, canonical_options, sentence_model):
+        result, score = match_free_text_to_options("HTTPS", canonical_options, 0.1, sentence_model)
         assert result.final_choice == "C"
         assert result.status == PARSE_OK
         assert score == pytest.approx(1.0)
 
-    def test_exact_match_incorrect(self, canonical_options):
-        result, score = match_free_text_to_options("FTP", canonical_options, 0.1)
+    def test_exact_match_incorrect(self, canonical_options, sentence_model):
+        result, score = match_free_text_to_options("FTP", canonical_options, 0.1, sentence_model)
         assert result.final_choice == "A"
         assert result.status == PARSE_OK
 
-    def test_below_threshold_is_missing(self, canonical_options):
+    def test_below_threshold_is_missing(self, canonical_options, sentence_model):
         result, score = match_free_text_to_options(
-            "completely unrelated response xyz", canonical_options, 0.9
+            "completely unrelated response xyz", canonical_options, 0.9, sentence_model
         )
         assert result.final_choice is None
         assert result.status == PARSE_MISSING
 
-    def test_empty_free_text_is_missing(self, canonical_options):
-        result, score = match_free_text_to_options("", canonical_options, 0.1)
+    def test_empty_free_text_is_missing(self, canonical_options, sentence_model):
+        result, score = match_free_text_to_options("", canonical_options, 0.1, sentence_model)
         assert result.final_choice is None
         assert result.status == PARSE_MISSING
         assert score is None
 
-    def test_zero_threshold_always_selects(self, canonical_options):
+    def test_zero_threshold_always_selects(self, canonical_options, sentence_model):
         result, score = match_free_text_to_options(
-            "totally irrelevant text zzz", canonical_options, 0.0
+            "totally irrelevant text zzz", canonical_options, 0.0, sentence_model
         )
         assert result.final_choice is not None
         assert result.status == PARSE_OK
