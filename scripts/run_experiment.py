@@ -25,11 +25,13 @@ from modelgen.backends.dummy import DummyBackend
 from modelgen.infra.checkpoint import CheckpointManager
 from modelgen.io.readers import read_normalized_questions, read_split_ids
 from modelgen.io.writers import write_run_results
+from modelgen.runners.abcd import ABCDRunner
 from modelgen.runners.additional_option import AdditionalOptionRunner
 from modelgen.runners.calibration import AnswerCalibrationRunner
 from modelgen.runners.direct_mcq import DirectMCQRunner
 from modelgen.runners.permutation import PermutationRunner
 from modelgen.runners.pride import PriDeRunner
+from modelgen.runners.text_extraction import TextExtractionRunner
 from modelgen.runners.two_stage import TwoStageRunner
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,17 +54,21 @@ _METHOD_TO_RUNNER = {
     "pride": PriDeRunner,
     "calibration": AnswerCalibrationRunner,
     "additional_option": AdditionalOptionRunner,
+    "text_extraction": TextExtractionRunner,
+    "abcd": ABCDRunner,
 }
 
 # Backend calls per question for each method (used for preflight estimates).
 # ``pride`` is handled specially in ``preflight_estimate`` (calibration + inference).
 _CALLS_PER_QUESTION = {
     "baseline": 1,
-    "two_prompt": 2,       # stage 1 free-text + stage 2 matching
-    "cyclic": 4,           # 4 cyclic permutations
-    "pride": 1,            # 1 score_options call per eval question
-    "calibration": 1,      # 1 score_options call per eval question (+ 1 setup call total)
+    "two_prompt": 2,           # stage 1 free-text + stage 2 matching
+    "cyclic": 4,               # 4 cyclic permutations
+    "pride": 1,                # 1 score_options call per eval question
+    "calibration": 1,          # 1 score_options call per eval question (+ 1 setup call total)
     "additional_option": 1,
+    "text_extraction": 1,      # stage 1 only; stage 2 is deterministic similarity matching
+    "abcd": 1,                 # stage 1 only; stage 2 is deterministic similarity matching
 }
 
 # Maps (benchmark, split) to the artifact_group subdirectory used by read_split_ids.
@@ -272,6 +278,11 @@ def run_single_method(
         runner = runner_cls(
             **common_kw,
             fallback_on_parse_failure=run_cfg.get("fallback_on_parse_failure", False),
+        )
+    elif method in ("text_extraction", "abcd"):
+        runner = runner_cls(
+            **common_kw,
+            similarity_threshold=run_cfg.get("similarity_threshold", 0.1),
         )
     else:
         runner = runner_cls(**common_kw)

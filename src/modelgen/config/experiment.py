@@ -11,6 +11,8 @@ CYCLIC_METHOD = "cyclic"
 TWOPROMPT_CYCLIC_METHOD = "two_prompt_cyclic"
 PRIDE_METHOD = "pride"
 ADDITIONAL_OPTION_METHOD = "additional_option"
+TEXT_EXTRACTION_METHOD = "text_extraction"
+ABCD_METHOD = "abcd"
 
 ALL_METHODS = [
     BASELINE_METHOD,
@@ -18,6 +20,8 @@ ALL_METHODS = [
     CYCLIC_METHOD,
     PRIDE_METHOD,
     ADDITIONAL_OPTION_METHOD,
+    TEXT_EXTRACTION_METHOD,
+    ABCD_METHOD,
 ]
 
 # Track A: robustness / accuracy ------------------------

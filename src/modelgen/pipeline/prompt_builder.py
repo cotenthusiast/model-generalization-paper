@@ -3,7 +3,7 @@
 from pathlib import Path
 
 
-_TEMPLATE_NAMES = ("direct_mcq", "free_text", "option_matching")
+_TEMPLATE_NAMES = ("direct_mcq", "free_text", "option_matching", "text_extraction", "abcd")
 
 
 def load_prompt_templates(version: str, prompts_dir: Path) -> dict[str, str]:
@@ -80,6 +80,72 @@ def build_free_text_prompt(template: str, question: str) -> str:
         Fully formatted prompt string.
     """
     return template.format(question=question)
+
+
+def build_text_extraction_prompt(
+    template: str,
+    question: str,
+    option_a: str,
+    option_b: str,
+    option_c: str,
+    option_d: str,
+) -> str:
+    """Format the text-extraction template for stage one of the text-extraction condition.
+
+    Options are shown with A/B/C/D labels; the model is instructed to respond
+    in free text rather than stating a letter.
+
+    Args:
+        template: Raw template string from load_prompt_templates.
+        question: Question stem.
+        option_a: Text of answer option A.
+        option_b: Text of answer option B.
+        option_c: Text of answer option C.
+        option_d: Text of answer option D.
+
+    Returns:
+        Fully formatted prompt string.
+    """
+    return template.format(
+        question=question,
+        option_a=option_a,
+        option_b=option_b,
+        option_c=option_c,
+        option_d=option_d,
+    )
+
+
+def build_abcd_prompt(
+    template: str,
+    question: str,
+    option_a: str,
+    option_b: str,
+    option_c: str,
+    option_d: str,
+) -> str:
+    """Format the ABCD template for stage one of the uniform-label condition.
+
+    Options are shown under neutral dash labels (no A/B/C/D letter cues) so
+    the model must respond in free text.
+
+    Args:
+        template: Raw template string from load_prompt_templates.
+        question: Question stem.
+        option_a: Text of answer option A.
+        option_b: Text of answer option B.
+        option_c: Text of answer option C.
+        option_d: Text of answer option D.
+
+    Returns:
+        Fully formatted prompt string.
+    """
+    return template.format(
+        question=question,
+        option_a=option_a,
+        option_b=option_b,
+        option_c=option_c,
+        option_d=option_d,
+    )
 
 
 def build_option_matching_prompt(
