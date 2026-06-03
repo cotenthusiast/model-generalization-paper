@@ -16,6 +16,8 @@ METHOD_ORDER = [
     "two_prompt",
     "cyclic",
     "pride",
+    "text_extraction",
+    "abcd",
 ]
 
 # add models here as experiments are run
@@ -32,6 +34,8 @@ METHOD_DISPLAY = {
     "two_prompt": "Two-Stage",
     "cyclic": "Cyclic Perm.",
     "pride": "PriDe",
+    "text_extraction": "Text Extraction",
+    "abcd": "ABCD",
 }
 
 

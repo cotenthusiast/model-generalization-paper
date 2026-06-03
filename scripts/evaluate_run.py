@@ -28,6 +28,8 @@ METHOD_ORDER = [
     "two_prompt",
     "cyclic",
     "pride",
+    "text_extraction",
+    "abcd",
 ]
 
 # add models here as experiments are run
