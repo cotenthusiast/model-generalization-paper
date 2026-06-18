@@ -61,7 +61,7 @@ class AnswerCalibrationRunner(LocalExperimentRunner):
         return build_direct_mcq_prompt(
             template=self._prompts["direct_mcq"],
             question="N/A",
-            options=["N/A"] * 4
+            options={letter: "N/A" for letter in _OPTION_LETTERS},
         )
 
     def run_one(self, question_row: Any, sample_index: int) -> dict:
@@ -135,7 +135,7 @@ class AnswerCalibrationRunner(LocalExperimentRunner):
         return build_direct_mcq_prompt(
             template=self._prompts["direct_mcq"],
             question=question_row["question_text"],
-            options=list(self._build_options(question_row).values())
+            options=self._build_options(question_row)
         )
 
     def _apply_correction(

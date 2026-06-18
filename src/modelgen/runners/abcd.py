@@ -35,10 +35,7 @@ class ABCDRunner(LocalExperimentRunner):
         prompt = build_abcd_prompt(
             template=self._prompts["abcd"],
             question=question_row["question_text"],
-            option_a=question_row["choice_a"],
-            option_b=question_row["choice_b"],
-            option_c=question_row["choice_c"],
-            option_d=question_row["choice_d"],
+            options=self._build_options(question_row),
         )
         generation_result, latency, error = self._call_backend(prompt)
 

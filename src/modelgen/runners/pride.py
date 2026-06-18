@@ -397,5 +397,5 @@ class PriDeRunner(LocalExperimentRunner):
         return build_direct_mcq_prompt(
             template=self._prompts["direct_mcq"],
             question=question_row["question_text"],
-            options=list(self._build_options(question_row).values()),
+            options=self._build_options(question_row),
         )

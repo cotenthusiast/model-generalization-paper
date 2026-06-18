@@ -98,7 +98,7 @@ class PermutationRunner(LocalExperimentRunner):
         return build_direct_mcq_prompt(
             template=template,
             question=question_row["question_text"],
-            options=list(permuted_options.values()),
+            options=permuted_options,
         )
 
     @staticmethod

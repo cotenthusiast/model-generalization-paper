@@ -179,3 +179,15 @@ class TestPermutationRunnerRunOne:
 
         assert isinstance(result["latency_seconds"], float)
         assert result["latency_seconds"] >= 0.0
+
+    def test_missing_fourth_option_has_no_phantom_choice(self, runner_question_row):
+        """A 3-option question must rotate only 3 real options, never a phantom D."""
+        row = dict(runner_question_row, choice_d=float("nan"))
+        b = DummyBackend(fixed_text="C")
+        b.load()
+        result = _make_runner(b).run_one(row, sample_index=0)
+
+        assert "nan" not in result["prompt"].lower()
+        assert "D." not in result["prompt"]
+        assert result["parsed_choice"] == "C"
+        assert result["is_correct"] is True

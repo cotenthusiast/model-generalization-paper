@@ -1,0 +1,43 @@
+# Rerun config — completes the abcd/text_extraction ARC-Challenge combo for
+# Qwen 7B, previously stopped at 850/1000 (prompt_builder bug: 3 robustness
+# questions have no choice_d; text_extraction/abcd crashed on the NaN option
+# text, silently dropping their checkpoint batch). Split out from
+# rerun_arc_abcd_text_extraction_7b_8b.yaml into one model per config so each
+# model is its own SLURM job.
+# Run with: python scripts/run_experiment.py --run-id 20260617_162624 --config config/rerun_arc_abcd_text_extraction_qwen7b.yaml --yes
+
+models:
+  Qwen/Qwen2.5-7B-Instruct:
+    model_path: Qwen/Qwen2.5-7B-Instruct
+    family: qwen
+    size_label: 7B
+    device: auto
+
+run:
+  temperature: 0.0
+  max_tokens: 500
+  seed: 42
+  prompt_version: "v1"
+
+  max_questions: 1000
+
+  checkpoint_every_n: 50
+
+  similarity_threshold: 0.3
+
+  fallback_on_parse_failure: false
+
+  jobs:
+    - model: Qwen/Qwen2.5-7B-Instruct
+      methods: [abcd, text_extraction]
+      benchmark: arc_challenge
+      split: robustness
+
+paths:
+  runs_dir: runs
+  checkpoints_dir: checkpoints
+  cache_dir: .cache/responses
+  reports_dir: reports
+  data_processed_dir: data/processed
+  data_splits_dir: data/splits
+  prompts_dir: prompts

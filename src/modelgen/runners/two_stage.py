@@ -68,10 +68,7 @@ class TwoStageRunner(LocalExperimentRunner):
             template=self._prompts["option_matching"],
             question=question_row["question_text"],
             free_text=free_text_result.raw_text,
-            option_a=question_row["choice_a"],
-            option_b=question_row["choice_b"],
-            option_c=question_row["choice_c"],
-            option_d=question_row["choice_d"],
+            options=self._build_options(question_row),
         )
 
         result = self._build_result_row(
@@ -112,10 +109,7 @@ class TwoStageRunner(LocalExperimentRunner):
             template=self._prompts["option_matching"],
             question=question_row["question_text"],
             free_text=free_text_answer,
-            option_a=question_row["choice_a"],
-            option_b=question_row["choice_b"],
-            option_c=question_row["choice_c"],
-            option_d=question_row["choice_d"],
+            options=self._build_options(question_row),
         )
         return self._call_backend(prompt)
 
@@ -136,7 +130,7 @@ class TwoStageRunner(LocalExperimentRunner):
         fallback_prompt = build_direct_mcq_prompt(
             template=self._prompts["direct_mcq"],
             question=question_row["question_text"],
-            options=list(self._build_options(question_row).values()),
+            options=self._build_options(question_row),
         )
         fallback_result, _, _ = self._call_backend(fallback_prompt)
         if fallback_result is not None:

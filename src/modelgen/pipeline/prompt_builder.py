@@ -47,25 +47,44 @@ def load_prompt_templates(version: str, prompts_dir: Path) -> dict[str, str]:
     return templates
 
 
+def _build_options_block(options: dict[str, str], label_style: str = "letter") -> str:
+    """Render an options dict as a labeled block, one line per option.
+
+    Args:
+        options: Mapping from label (e.g. "A", "E") to option text. Rendered
+            in dict order using the dict's own keys — never regenerated from
+            position — so a label is never reassigned to the wrong option
+            text when a question has fewer than 4 real options (e.g. an
+            additional_option "E" must stay "E" even when "D" is missing,
+            not silently shift into the gap left by D).
+        label_style: "letter" for "A. text" lines (used by direct_mcq,
+            text_extraction, option_matching), or "dash" for "- text" lines
+            (used by abcd, which deliberately avoids letter cues).
+
+    Returns:
+        Newline-joined block of labeled option lines.
+    """
+    if label_style == "dash":
+        return "\n".join(f"- {text}" for text in options.values())
+    return "\n".join(f"{letter}. {text}" for letter, text in options.items())
+
+
 def build_direct_mcq_prompt(
     template: str,
     question: str,
-    options: list[str],
+    options: dict[str, str],
 ) -> str:
     """Format the direct MCQ template with question and option text.
 
     Args:
         template: Raw template string from load_prompt_templates.
         question: Question stem to present to the model.
-        options: Option texts in order; labels A, B, C, ... are assigned by position.
+        options: Mapping from label to option text, e.g. {"A": ..., "B": ...}.
 
     Returns:
         Fully formatted prompt string.
     """
-    labels = "ABCDEFGHIJ"
-    options_block = "\n".join(
-        f"{labels[i]}. {text}" for i, text in enumerate(options)
-    )
+    options_block = _build_options_block(options, "letter")
     return template.format(question=question, options=options_block)
 
 
@@ -85,10 +104,7 @@ def build_free_text_prompt(template: str, question: str) -> str:
 def build_text_extraction_prompt(
     template: str,
     question: str,
-    option_a: str,
-    option_b: str,
-    option_c: str,
-    option_d: str,
+    options: dict[str, str],
 ) -> str:
     """Format the text-extraction template for stage one of the text-extraction condition.
 
@@ -98,30 +114,19 @@ def build_text_extraction_prompt(
     Args:
         template: Raw template string from load_prompt_templates.
         question: Question stem.
-        option_a: Text of answer option A.
-        option_b: Text of answer option B.
-        option_c: Text of answer option C.
-        option_d: Text of answer option D.
+        options: Mapping from label to option text, e.g. {"A": ..., "B": ...}.
 
     Returns:
         Fully formatted prompt string.
     """
-    return template.format(
-        question=question,
-        option_a=option_a,
-        option_b=option_b,
-        option_c=option_c,
-        option_d=option_d,
-    )
+    options_block = _build_options_block(options, "letter")
+    return template.format(question=question, options=options_block)
 
 
 def build_abcd_prompt(
     template: str,
     question: str,
-    option_a: str,
-    option_b: str,
-    option_c: str,
-    option_d: str,
+    options: dict[str, str],
 ) -> str:
     """Format the ABCD template for stage one of the uniform-label condition.
 
@@ -131,31 +136,20 @@ def build_abcd_prompt(
     Args:
         template: Raw template string from load_prompt_templates.
         question: Question stem.
-        option_a: Text of answer option A.
-        option_b: Text of answer option B.
-        option_c: Text of answer option C.
-        option_d: Text of answer option D.
+        options: Mapping from label to option text; only the text is rendered.
 
     Returns:
         Fully formatted prompt string.
     """
-    return template.format(
-        question=question,
-        option_a=option_a,
-        option_b=option_b,
-        option_c=option_c,
-        option_d=option_d,
-    )
+    options_block = _build_options_block(options, "dash")
+    return template.format(question=question, options=options_block)
 
 
 def build_option_matching_prompt(
     template: str,
     question: str,
     free_text: str,
-    option_a: str,
-    option_b: str,
-    option_c: str,
-    option_d: str,
+    options: dict[str, str],
 ) -> str:
     """Format the option-matching template for stage two of two-stage methods.
 
@@ -163,19 +157,10 @@ def build_option_matching_prompt(
         template: Raw template string from load_prompt_templates.
         question: Original question stem.
         free_text: Free-text answer produced in stage one.
-        option_a: Text of answer option A.
-        option_b: Text of answer option B.
-        option_c: Text of answer option C.
-        option_d: Text of answer option D.
+        options: Mapping from label to option text, e.g. {"A": ..., "B": ...}.
 
     Returns:
         Fully formatted prompt string.
     """
-    return template.format(
-        question=question,
-        free_text=free_text,
-        option_a=option_a,
-        option_b=option_b,
-        option_c=option_c,
-        option_d=option_d,
-    )
+    options_block = _build_options_block(options, "letter")
+    return template.format(question=question, free_text=free_text, options=options_block)

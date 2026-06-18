@@ -10,7 +10,7 @@ from typing import Any, Sequence
 
 from modelgen.backends.base import LocalBackend
 from modelgen.backends.types import LocalGenerationConfig, ModelGenerationResult
-from modelgen.parsing.parser import parse_model_answer
+from modelgen.parsing.parser import normalize_output_text, parse_model_answer
 from modelgen.parsing.types import ParseResult
 from modelgen.pipeline.prompt_builder import load_prompt_templates
 from modelgen.scoring.scorer import score_prediction
@@ -157,9 +157,17 @@ class LocalExperimentRunner(ABC):
 
     @staticmethod
     def _build_options(question_row: Any) -> dict[str, str]:
-        return {
+        """Return this question's real answer options, keyed by letter.
+
+        Some ARC-Challenge questions have only 3 options (no choice_d). Such
+        a missing choice arrives here as None or NaN (CSV round-trips turn an
+        originally empty field into NaN), so any letter whose text normalizes
+        to empty is dropped rather than shown to the model as a phantom option.
+        """
+        raw = {
             "A": question_row["choice_a"],
             "B": question_row["choice_b"],
             "C": question_row["choice_c"],
             "D": question_row["choice_d"],
         }
+        return {k: v for k, v in raw.items() if normalize_output_text(v) != ""}

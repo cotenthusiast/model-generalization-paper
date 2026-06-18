@@ -143,3 +143,25 @@ class TestDirectMCQRunnerBuildPrompt:
         assert "HTTP" in prompt
         assert "HTTPS" in prompt
         assert "SMTP" in prompt
+
+
+class TestMissingFourthOption:
+    """Some ARC-Challenge questions have no choice_d (arrives as None/NaN)."""
+
+    def test_build_options_drops_missing_choice(self, runner_question_row):
+        row = dict(runner_question_row, choice_d=float("nan"))
+        b = DummyBackend()
+        b.load()
+        options = _make_runner(b)._build_options(row)
+
+        assert list(options.keys()) == ["A", "B", "C"]
+
+    def test_prompt_has_no_phantom_option(self, runner_question_row):
+        """The model must never see 'D. nan' for a 3-option question."""
+        row = dict(runner_question_row, choice_d=float("nan"))
+        b = DummyBackend(fixed_text="C")
+        b.load()
+        result = _make_runner(b).run_one(row, sample_index=0)
+
+        assert "nan" not in result["prompt"].lower()
+        assert "D." not in result["prompt"]

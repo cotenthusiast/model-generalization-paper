@@ -100,6 +100,17 @@ class TestAnswerCalibrationRunnerIntegration:
         assert len(rows) == 2
         assert all(r["model_status"] == "success" for r in rows)
 
+    def test_missing_fourth_option_has_no_phantom_choice_in_prompt(self, runner_question_row):
+        """A 3-option question must not show a phantom D in the rendered prompt."""
+        row = dict(runner_question_row, choice_d=float("nan"))
+        b = DummyBackend()
+        b.load()
+        rows = _make_runner(b).run_many([row])
+
+        assert "nan" not in rows[0]["prompt"].lower()
+        assert "D." not in rows[0]["prompt"]
+        assert rows[0]["model_status"] == "success"
+
 
 class TestApplyCorrection:
     def test_subtracts_prior_from_raw_scores(self, runner_question_row):

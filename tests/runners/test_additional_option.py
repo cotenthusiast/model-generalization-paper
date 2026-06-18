@@ -77,3 +77,17 @@ class TestAdditionalOptionEParsing:
 
         assert len(rows) == 1
         assert rows[0]["model_status"] == "success"
+
+    def test_missing_fourth_option_has_no_phantom_choice(self, runner_question_row):
+        """A 3-option question keeps E but must not show a phantom D."""
+        row = dict(runner_question_row, choice_d=float("nan"))
+        b = DummyBackend()
+        b.load()
+        runner = _make_runner(b)
+        options = runner._build_options(row)
+
+        assert set(options.keys()) == {"A", "B", "C", "E"}
+        prompt = runner._build_prompt(row)
+        assert "nan" not in prompt.lower()
+        assert "D." not in prompt
+        assert "E. I don't know" in prompt

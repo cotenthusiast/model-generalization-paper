@@ -3,9 +3,6 @@ Answer the following multiple-choice question.
 Question: {question}
 
 Options:
-- {option_a}
-- {option_b}
-- {option_c}
-- {option_d}
+{options}
 
 Respond with a short direct answer in your own words.
