@@ -16,17 +16,26 @@ METHOD_ORDER = [
     "two_prompt",
     "cyclic",
     "pride",
+    "calibration",
+    "additional_option",
     "text_extraction",
     "abcd",
 ]
 
-# add models here as experiments are run
 MODEL_ORDER = [
     "Qwen/Qwen2.5-7B-Instruct",
+    "Qwen/Qwen2.5-32B-Instruct",
+    "Qwen/Qwen2.5-72B-Instruct",
+    "meta-llama/Llama-3.1-8B-Instruct",
+    "meta-llama/Llama-3.1-70B-Instruct",
 ]
 
 MODEL_DISPLAY = {
     "Qwen/Qwen2.5-7B-Instruct": "Qwen 2.5 7B",
+    "Qwen/Qwen2.5-32B-Instruct": "Qwen 2.5 32B",
+    "Qwen/Qwen2.5-72B-Instruct": "Qwen 2.5 72B",
+    "meta-llama/Llama-3.1-8B-Instruct": "Llama 3.1 8B",
+    "meta-llama/Llama-3.1-70B-Instruct": "Llama 3.1 70B",
 }
 
 METHOD_DISPLAY = {
@@ -34,6 +43,8 @@ METHOD_DISPLAY = {
     "two_prompt": "Two-Stage",
     "cyclic": "Cyclic Perm.",
     "pride": "PriDe",
+    "calibration": "Calibration",
+    "additional_option": "Additional Option",
     "text_extraction": "Text Extraction",
     "abcd": "ABCD",
 }

@@ -11,6 +11,7 @@ from scipy.stats import beta as _beta_dist
 
 from modelgen.config.experiment import (
     BASELINE_METHOD,
+    CALIBRATION_METHOD,
     PRIDE_METHOD,
     TWOPROMPT_METHOD,
     TWOPROMPT_CYCLIC_METHOD,
@@ -28,13 +29,18 @@ METHOD_ORDER = [
     "two_prompt",
     "cyclic",
     "pride",
+    "calibration",
+    "additional_option",
     "text_extraction",
     "abcd",
 ]
 
-# add models here as experiments are run
 MODEL_ORDER = [
     "Qwen/Qwen2.5-7B-Instruct",
+    "Qwen/Qwen2.5-32B-Instruct",
+    "Qwen/Qwen2.5-72B-Instruct",
+    "meta-llama/Llama-3.1-8B-Instruct",
+    "meta-llama/Llama-3.1-70B-Instruct",
 ]
 
 N_BOOTSTRAP = 10_000
@@ -121,6 +127,10 @@ def reparse_run(df: pd.DataFrame) -> pd.DataFrame:
 
     Eligible rows must additionally have model_status != "failure" so that
     raw_text is present.
+
+    ``pride`` and ``calibration`` rows are also excluded: both methods pick
+    their answer via backend.score_options() rather than generating text, so
+    raw_text is always null for them and there is nothing to re-parse.
     """
     df = df.copy()
     # CSV loads can infer float64 for columns with NaNs; reparsing assigns bools.
@@ -131,6 +141,7 @@ def reparse_run(df: pd.DataFrame) -> pd.DataFrame:
         (df["model_status"].fillna("") != "failure")
         & (df["parse_reason"].fillna("") != "majority_vote")
         & (df["method_name"] != PRIDE_METHOD)
+        & (df["method_name"] != CALIBRATION_METHOD)
     )
 
     parsed_choices = []

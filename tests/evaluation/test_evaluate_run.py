@@ -18,6 +18,7 @@ _spec.loader.exec_module(_evaluate_run)
 
 apply_baseline_fallback = _evaluate_run.apply_baseline_fallback
 compute_accuracy = _evaluate_run.compute_accuracy
+reparse_run = _evaluate_run.reparse_run
 
 
 # ---------------------------------------------------------------------------
@@ -241,3 +242,93 @@ class TestComputeAccuracyFallbackCount:
         accuracy = compute_accuracy(df_after)
         bl = accuracy[accuracy["method"] == "baseline"]
         assert (bl["fallback_count"] == 0).all()
+
+
+# ---------------------------------------------------------------------------
+# reparse_run — score_options() methods (pride, calibration) have no raw_text
+# ---------------------------------------------------------------------------
+
+
+def _reparsable_row(
+    *,
+    question_id: str,
+    method_name: str,
+    raw_text,
+    parse_reason: str,
+    parsed_choice,
+    is_correct,
+    correct_option: str = "C",
+) -> dict:
+    return {
+        "question_id": question_id,
+        "method_name": method_name,
+        "model_name": "Qwen/Qwen2.5-7B-Instruct",
+        "model_status": "success",
+        "raw_text": raw_text,
+        "choice_a": "wrong A",
+        "choice_b": "wrong B",
+        "choice_c": "right answer",
+        "choice_d": "wrong D",
+        "correct_option": correct_option,
+        "parsed_choice": parsed_choice,
+        "parse_status": "ok",
+        "parse_reason": parse_reason,
+        "is_correct": is_correct,
+    }
+
+
+class TestReparseRunSkipsScoreOptionsMethods:
+    """pride and calibration pick answers via score_options(), so raw_text is
+    always null for them — reparse_run must not try to re-parse those rows."""
+
+    @pytest.fixture
+    def df_with_score_options_methods(self):
+        return pd.DataFrame(
+            [
+                _reparsable_row(
+                    question_id="q1",
+                    method_name="baseline",
+                    raw_text="The answer is C.",
+                    parse_reason="direct",
+                    parsed_choice=None,
+                    is_correct=None,
+                ),
+                _reparsable_row(
+                    question_id="q1",
+                    method_name="pride",
+                    raw_text=float("nan"),
+                    parse_reason="pride_eq8",
+                    parsed_choice="C",
+                    is_correct=True,
+                ),
+                _reparsable_row(
+                    question_id="q1",
+                    method_name="calibration",
+                    raw_text=float("nan"),
+                    parse_reason="answer_calibration",
+                    parsed_choice="A",
+                    is_correct=False,
+                ),
+            ]
+        )
+
+    def test_does_not_raise_on_null_raw_text(self, df_with_score_options_methods):
+        reparse_run(df_with_score_options_methods)
+
+    def test_calibration_row_left_unchanged(self, df_with_score_options_methods):
+        result = reparse_run(df_with_score_options_methods)
+        row = result[result["method_name"] == "calibration"].iloc[0]
+        assert row["parsed_choice"] == "A"
+        assert row["is_correct"] == False  # noqa: E712
+
+    def test_pride_row_left_unchanged(self, df_with_score_options_methods):
+        result = reparse_run(df_with_score_options_methods)
+        row = result[result["method_name"] == "pride"].iloc[0]
+        assert row["parsed_choice"] == "C"
+        assert row["is_correct"] == True  # noqa: E712
+
+    def test_baseline_row_is_reparsed(self, df_with_score_options_methods):
+        result = reparse_run(df_with_score_options_methods)
+        row = result[result["method_name"] == "baseline"].iloc[0]
+        assert row["parsed_choice"] == "C"
+        assert row["is_correct"] == True  # noqa: E712
