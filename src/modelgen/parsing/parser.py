@@ -31,7 +31,9 @@ def normalize_output_text(raw_text: str | None) -> str:
     Returns:
         Normalized text string suitable for downstream parsing.
     """
-    if raw_text is None:
+    if raw_text is None or not isinstance(raw_text, str):
+        # Covers pandas/numpy NaN, which round-trips through CSV in place of
+        # an originally empty string and is not safe to call .strip() on.
         return ""
     raw_text = raw_text.strip()
     if raw_text == "":

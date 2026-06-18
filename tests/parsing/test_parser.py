@@ -22,6 +22,11 @@ class TestNormalizeOutputText:
     def test_returns_empty_string_for_none(self) -> None:
         assert normalize_output_text(None) == ""
 
+    def test_returns_empty_string_for_nan(self) -> None:
+        """pandas reads an originally empty raw_text string back as float NaN
+        on CSV reload; this must not crash like a raw .strip() call would."""
+        assert normalize_output_text(float("nan")) == ""
+
     def test_returns_empty_string_for_blank_input(self) -> None:
         assert normalize_output_text(" ") == ""
 
