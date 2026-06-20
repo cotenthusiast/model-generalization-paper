@@ -6,25 +6,30 @@ from sentence_transformers import SentenceTransformer
 
 from modelgen.pipeline.prompt_builder import build_abcd_prompt
 from modelgen.runners.local_base import LocalExperimentRunner
-from modelgen.runners.text_extraction import _DEFAULT_EMBEDDING_MODEL, match_free_text_to_options
+from modelgen.runners.text_extraction import _ABCD_EMBEDDING_MODEL, resolve_stage2_answer
 
 
 class ABCDRunner(LocalExperimentRunner):
-    """Runner for the ABCD uniform-label condition (Nowak et al. 2026).
+    """Runner for the ABCD uniform-label condition.
 
     Stage 1 presents all four options under neutral dash labels instead of
     A/B/C/D letter labels, eliciting a free-text answer free of positional
-    letter cues. Stage 2 deterministically selects the best-matching option
-    using sentence-embedding cosine similarity — no second LLM call.
-
-    The stage-2 matching logic is identical to TextExtractionRunner.
+    letter cues. Stage 2 (resolve_stage2_answer, shared with
+    TextExtractionRunner) resolves a declared letter directly if the model
+    states one despite the dash labels, isolates the model's earliest
+    clearly-stated answer span otherwise, and falls back to
+    sentence-embedding cosine similarity against option text — no second
+    LLM call. No abstention threshold (always argmax over similarity), and a
+    dedicated embedding model rather than TextExtractionRunner's smaller
+    default. This is this codebase's own design for the condition, not a
+    verified reproduction of a specific published procedure.
     """
 
     def __init__(
         self,
         *args,
-        similarity_threshold: float = 0.1,
-        embedding_model: str = _DEFAULT_EMBEDDING_MODEL,
+        similarity_threshold: float = float("-inf"),
+        embedding_model: str = _ABCD_EMBEDDING_MODEL,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -44,7 +49,7 @@ class ABCDRunner(LocalExperimentRunner):
         best_similarity_score = None
 
         if generation_result is not None:
-            parsed_result, best_similarity_score = match_free_text_to_options(
+            parsed_result, best_similarity_score = resolve_stage2_answer(
                 generation_result.raw_text,
                 self._build_options(question_row),
                 self._similarity_threshold,

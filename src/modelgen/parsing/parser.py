@@ -15,6 +15,27 @@ from modelgen.parsing.types import (
 DEFAULT_VALID_CHOICES = ("A", "B", "C", "D")
 
 
+def detect_leading_letter(
+    normalized_text: str,
+    valid_choices: Collection[str] = DEFAULT_VALID_CHOICES,
+) -> str | None:
+    """Return the letter if text opens with "<letter>." / "<letter>)" / "<letter>:", else None.
+
+    Distinguishes a declared MCQ answer from organic prose that happens to
+    start with a letter-like word (e.g. the indefinite article "A", as in
+    "A permutation can be..."), which is always followed by whitespace
+    rather than punctuation. Shared by extract_choice_letter and any other
+    parser that needs to check for a stated leading answer before falling
+    back to a fuzzier matching method.
+    """
+    if not normalized_text:
+        return None
+    first_word = normalized_text.split()[0]
+    if len(first_word) >= 2 and first_word[0].upper() in valid_choices and first_word[1] in ".):":
+        return first_word[0].upper()
+    return None
+
+
 def normalize_output_text(raw_text: str | None) -> str:
     """
     Normalize raw model output before parsing.
@@ -148,6 +169,12 @@ def extract_choice_letter(
         if w.upper() in valid_choices:
             last_weak = (i, w.upper())
 
+    # Without this tier, a later sentence like "A permutation can be..." can
+    # hijack the weak-letter scan and override an already-declared leading
+    # answer (see test_parser.py for the real model-output case this was
+    # found from).
+    leading = detect_leading_letter(normalized_text, valid_choices)
+
     if last_strong is not None:
         return ParseResult(
             final_choice=last_strong[1],
@@ -155,6 +182,14 @@ def extract_choice_letter(
             raw_text=None,
             normalized_text=normalized_text,
             reason="Answer successfully parsed from strong cue pattern",
+        )
+    if leading is not None:
+        return ParseResult(
+            final_choice=leading,
+            status=PARSE_OK,
+            raw_text=None,
+            normalized_text=normalized_text,
+            reason="Answer successfully parsed from leading letter",
         )
     if last_weak is not None:
         return ParseResult(

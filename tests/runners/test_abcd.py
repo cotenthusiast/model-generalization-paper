@@ -13,7 +13,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _PROMPTS_DIR = REPO_ROOT / "prompts"
 
 
-def _make_runner(backend, similarity_threshold=0.1):
+def _make_runner(backend, similarity_threshold=0.1, embedding_model="all-MiniLM-L6-v2"):
+    # Tests pin the small embedding model explicitly — ABCDRunner's real
+    # default is the larger Qwen3-Embedding-0.6B (matching the source paper),
+    # which would make every test download/load a 600M-param model.
     return ABCDRunner(
         backend=backend,
         method_name="abcd",
@@ -22,6 +25,7 @@ def _make_runner(backend, similarity_threshold=0.1):
         prompts_dir=_PROMPTS_DIR,
         run_id="test_run_001",
         similarity_threshold=similarity_threshold,
+        embedding_model=embedding_model,
     )
 
 
@@ -137,5 +141,25 @@ class TestABCDRunnerRunOne:
 
         assert "nan" not in result["prompt"].lower()
         assert result["prompt"].count("- ") == 3
+        assert result["parsed_choice"] == "C"
+        assert result["is_correct"] is True
+
+    def test_real_world_hedge_and_pivot_resolves_to_first_statement(self, runner_question_row):
+        """Regression test mirroring real Qwen-32B/ARC-Challenge abcd output:
+        the model states a correct answer first, then hedges and pivots to a
+        different option in a later sentence. Stage 2 must select the
+        earliest stated answer, not whatever the embedding-diluting hedge
+        pivots to."""
+        b = DummyBackend(
+            fixed_text=(
+                "HTTPS is the correct protocol. "
+                "(Note: while FTP is also a protocol, it is not used for "
+                "secure browsing.) However, on reflection, some sources "
+                "suggest the answer might instead be considered SMTP."
+            )
+        )
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
+
         assert result["parsed_choice"] == "C"
         assert result["is_correct"] is True

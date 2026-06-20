@@ -3,6 +3,7 @@
 import pytest
 
 from modelgen.parsing.parser import (
+    detect_leading_letter,
     extract_choice_letter,
     extract_choice_text_match,
     normalize_output_text,
@@ -103,6 +104,56 @@ class TestExtractChoiceLetter:
 
     def test_returns_missing_when_no_direct_letter_exists(self) -> None:
         assert extract_choice_letter("Im not sure").status == PARSE_MISSING
+
+    def test_leading_letter_protected_from_indefinite_article_a(self) -> None:
+        """Regression test for a real Qwen-32B MMLU response: the model
+        declared D. up front, but a later sentence beginning with the
+        indefinite article "A" ("A permutation can be...") was hijacking
+        the weak last-standalone-letter scan and silently flipping the
+        parsed answer to A."""
+        result = extract_choice_letter(
+            "D. False, True Explanation: Statement 1 is false because not "
+            "every permutation is a single cycle. A permutation can be a "
+            "product of disjoint cycles."
+        )
+        assert result.final_choice == "D"
+        assert result.status == PARSE_OK
+
+    def test_leading_letter_wins_over_later_bare_weak_letter(self) -> None:
+        result = extract_choice_letter("B. Some explanation mentioning A later on.")
+        assert result.final_choice == "B"
+        assert result.status == PARSE_OK
+
+    def test_strong_cue_still_overrides_leading_letter(self) -> None:
+        result = extract_choice_letter(
+            "A. Initial guess. On reflection, the answer is C."
+        )
+        assert result.final_choice == "C"
+        assert result.status == PARSE_OK
+
+
+class TestDetectLeadingLetter:
+    """Tests for detect_leading_letter, shared by extract_choice_letter and
+    other matchers (e.g. additional_option's Jaccard matcher) that need the
+    same leading-letter precondition."""
+
+    def test_letter_followed_by_period(self) -> None:
+        assert detect_leading_letter("D. the independent variable", "ABCDE") == "D"
+
+    def test_letter_followed_by_paren(self) -> None:
+        assert detect_leading_letter("B) some explanation", "ABCDE") == "B"
+
+    def test_letter_followed_by_colon(self) -> None:
+        assert detect_leading_letter("C: HTTPS", "ABCDE") == "C"
+
+    def test_indefinite_article_not_treated_as_leading_letter(self) -> None:
+        assert detect_leading_letter("A permutation can be a product", "ABCDE") is None
+
+    def test_letter_not_in_valid_choices_returns_none(self) -> None:
+        assert detect_leading_letter("E. I don't know", "ABCD") is None
+
+    def test_empty_text_returns_none(self) -> None:
+        assert detect_leading_letter("", "ABCDE") is None
 
 
 class TestExtractChoiceTextMatch:

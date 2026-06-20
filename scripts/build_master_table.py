@@ -47,6 +47,9 @@ from evaluate_run import (  # noqa: E402
     OPTIONS,
     _bootstrap_ci_mean_abs_deviation,
     _clopper_pearson_ci,
+    rematch_abcd_rows,
+    rematch_additional_option_rows,
+    rematch_text_extraction_rows,
     reparse_run,
 )
 from modelgen.config.paths import REPORTS_DIR, RUNS_DIR  # noqa: E402
@@ -208,6 +211,18 @@ def main() -> None:
 
     print("[master] Re-parsing with current parser...")
     df = reparse_run(df)
+
+    if (df["method_name"] == "abcd").any():
+        print("[master] Re-matching abcd responses with current embedding config...")
+        df = rematch_abcd_rows(df)
+
+    if (df["method_name"] == "text_extraction").any():
+        print("[master] Re-matching text_extraction responses with current embedding config...")
+        df = rematch_text_extraction_rows(df)
+
+    if (df["method_name"] == "additional_option").any():
+        print("[master] Re-matching additional_option responses with current Jaccard config...")
+        df = rematch_additional_option_rows(df)
 
     table = build_master_table(df)
 

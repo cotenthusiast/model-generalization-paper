@@ -6,7 +6,12 @@ import pytest
 
 from modelgen.backends.dummy import DummyBackend
 from modelgen.parsing.types import PARSE_MISSING, PARSE_OK
-from modelgen.runners.text_extraction import TextExtractionRunner, match_free_text_to_options
+from modelgen.runners.text_extraction import (
+    TextExtractionRunner,
+    extract_final_answer_span,
+    match_free_text_to_options,
+    resolve_stage2_answer,
+)
 from modelgen.scoring.types import SCORE_CORRECT, SCORE_INCORRECT, SCORE_UNSCORABLE
 
 from tests.runners.conftest import ErrorBackend
@@ -25,6 +30,80 @@ def _make_runner(backend, similarity_threshold=0.1):
         run_id="test_run_001",
         similarity_threshold=similarity_threshold,
     )
+
+
+class TestExtractFinalAnswerSpan:
+    """Unit tests for the abcd answer-isolation helper."""
+
+    def test_returns_empty_string_for_none(self):
+        assert extract_final_answer_span(None) == ""
+
+    def test_single_sentence_returned_unchanged(self):
+        assert extract_final_answer_span("HTTPS") == "HTTPS"
+
+    def test_falls_back_to_first_sentence_when_no_cue_present(self):
+        """Regression test: real abcd responses state the answer in sentence
+        1, then add caveats/restatements in later sentences. The fallback
+        (no explicit cue anywhere) must prefer the earliest sentence, not
+        the last -- the literal opposite of the previous (broken) behavior."""
+        text = "Some context here. More discussion follows. The relevant fact is X."
+        assert extract_final_answer_span(text) == "Some context here."
+
+    def test_isolates_explicit_conclusion_cue_over_earlier_discussion(self):
+        text = (
+            "Some might think this relates to symmetric groups, but actually "
+            "permutations form a broader category. A permutation can be a "
+            "product of disjoint cycles. Therefore the answer is that a "
+            "cycle is a type of permutation."
+        )
+        result = extract_final_answer_span(text)
+        assert "Therefore" in result
+        assert "symmetric groups" not in result
+
+    def test_first_cue_sentence_wins_when_multiple_present(self):
+        """Regression test: a model second-guessing itself ("On reflection,
+        the answer is C") must not override its first stated answer -- real
+        Qwen-32B/ARC-Challenge data showed exactly this shape, with 80% of a
+        125-question regression set flipping to correct once the *first*
+        stated answer was used instead of the last."""
+        text = "The answer is A. On reflection, the answer is C."
+        result = extract_final_answer_span(text)
+        assert "The answer is A" in result
+        assert "the answer is C" not in result
+
+    def test_strips_trailing_conversational_filler_before_cue_search(self):
+        text = "The answer is B. Let me know if you have any other questions!"
+        result = extract_final_answer_span(text)
+        assert "The answer is B" in result
+        assert "Let me know" not in result
+
+    def test_strips_trailing_filler_before_first_sentence_fallback(self):
+        text = "FTP is the correct protocol here. I hope this helps!"
+        result = extract_final_answer_span(text)
+        assert result == "FTP is the correct protocol here."
+
+    def test_all_filler_does_not_crash_and_returns_something(self):
+        """Edge case: if every sentence looks like filler, stripping must not
+        leave an empty candidate list -- fall back to the original text
+        rather than crashing or returning an empty span."""
+        text = "Let me know if you have any other questions!"
+        result = extract_final_answer_span(text)
+        assert result != ""
+
+    def test_real_world_hedge_and_pivot_pattern(self):
+        """Regression test mirroring real Qwen-32B/ARC-Challenge abcd output:
+        a clearly stated first answer, followed by a hedge that pivots to a
+        different (sometimes invented) restatement. The first statement must
+        win."""
+        text = (
+            "An infectious, cell-cycle disease. "
+            "(Note: while DFTD is indeed infectious, it is not typically "
+            "described as a cell-cycle disease in scientific literature.) "
+            "However, given the options, the best answer would be: an "
+            "infectious, chronic disease."
+        )
+        result = extract_final_answer_span(text)
+        assert result == "An infectious, cell-cycle disease."
 
 
 class TestMatchFreeTextToOptions:
@@ -59,6 +138,55 @@ class TestMatchFreeTextToOptions:
             "totally irrelevant text zzz", canonical_options, 0.0, sentence_model
         )
         assert result.final_choice is not None
+        assert result.status == PARSE_OK
+
+
+class TestResolveStage2Answer:
+    """Unit tests for the shared abcd/text_extraction stage-2 resolver."""
+
+    def test_leading_letter_resolved_without_embedding_model(self, canonical_options):
+        """Passing model=None proves this path never touches the embedding
+        model at all -- it must be resolved before that call."""
+        result, score = resolve_stage2_answer("C. HTTPS is correct.", canonical_options, 0.1, None)
+        assert result.final_choice == "C"
+        assert score == 1.0
+
+    def test_cue_stated_letter_resolved_without_embedding_model(self, canonical_options):
+        """Regression test: real Llama-3.1-8B-Instruct text_extraction output
+        showed ~25% of rows isolating a span like "The best answer is C."
+        instead of restated option text. Embedding that against option text
+        scores too low on every option and used to come back unscorable --
+        the cue-stated letter must be resolved directly instead."""
+        text = (
+            "HTTPS is used for secure browsing. "
+            "Therefore, the best answer is C."
+        )
+        result, score = resolve_stage2_answer(text, canonical_options, 0.1, None)
+        assert result.final_choice == "C"
+        assert score == 1.0
+
+    def test_indefinite_article_after_therefore_not_treated_as_letter(
+        self, canonical_options, sentence_model
+    ):
+        """"Therefore, a combination..." must not be misread as a stated
+        letter just because "a" upper-cases to a valid choice -- the
+        lowercase, unpunctuated token must fall through to embedding match."""
+        text = "Therefore, a combination of factors explains this, namely HTTPS."
+        result, score = resolve_stage2_answer(text, canonical_options, 0.1, sentence_model)
+        assert result.final_choice == "C"
+
+    def test_indefinite_article_after_answer_is_not_treated_as_letter(
+        self, canonical_options, sentence_model
+    ):
+        text = "The answer is a well-known secure web protocol, namely HTTPS."
+        result, score = resolve_stage2_answer(text, canonical_options, 0.1, sentence_model)
+        assert result.final_choice == "C"
+
+    def test_falls_back_to_embedding_match_when_no_letter_present(
+        self, canonical_options, sentence_model
+    ):
+        result, score = resolve_stage2_answer("HTTPS", canonical_options, 0.1, sentence_model)
+        assert result.final_choice == "C"
         assert result.status == PARSE_OK
 
 
@@ -165,5 +293,36 @@ class TestTextExtractionRunnerRunOne:
 
         assert "nan" not in result["prompt"].lower()
         assert "D." not in result["prompt"]
+        assert result["parsed_choice"] == "C"
+        assert result["is_correct"] is True
+
+    def test_leading_letter_resolved_directly_without_embedding(self, runner_question_row):
+        """Regression test: despite stage 1's instruction not to state a
+        letter, real data shows Qwen-7B does so anyway in ~90% of responses.
+        A declared leading letter must be resolved directly rather than
+        embedding the full response."""
+        b = DummyBackend(fixed_text="C. HTTPS is the secure protocol used for browsing.")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
+
+        assert result["parsed_choice"] == "C"
+        assert result["best_similarity_score"] == 1.0
+        assert result["is_correct"] is True
+
+    def test_long_hedging_response_uses_earliest_statement(self, runner_question_row):
+        """Regression test mirroring real Llama-3.1-8B-Instruct output: long,
+        repetitive, or hedging responses where the real answer is stated
+        early and would otherwise be diluted by embedding the full text."""
+        b = DummyBackend(
+            fixed_text=(
+                "HTTPS is the correct protocol. "
+                "(Note: while FTP is also a protocol, it is not used for "
+                "secure browsing.) However, on reflection, some sources "
+                "suggest the answer might instead be considered SMTP."
+            )
+        )
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
+
         assert result["parsed_choice"] == "C"
         assert result["is_correct"] is True
