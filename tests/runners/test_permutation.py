@@ -1,14 +1,61 @@
 # tests/runners/test_permutation.py
 
+import json
 from pathlib import Path
 
+import pytest
+
 from modelgen.backends.dummy import DummyBackend
+from modelgen.backends.types import ModelOptionScoreResult
 from modelgen.runners.permutation import PermutationRunner
 from modelgen.pipeline.prompt_builder import load_prompt_templates
 from modelgen.scoring.types import SCORE_CORRECT, SCORE_INCORRECT
 from modelgen.parsing.types import PARSE_OK, PARSE_MISSING
 
-from tests.runners.conftest import ErrorBackend
+from tests.runners.conftest import ErrorScoreBackend
+
+
+class ContentAwareScoreBackend(DummyBackend):
+    """Test backend with zero token/position bias: scores whichever letter
+    is currently labeled with `target_text` highest, regardless of which
+    letter that is. Used to verify Eq.(1)'s un-permutation actually tracks
+    content across rotations rather than just trusting letter position."""
+
+    def __init__(self, target_text: str, **kwargs):
+        super().__init__(**kwargs)
+        self._target_text = target_text
+
+    def score_options(self, prompt, options):
+        if not self._loaded:
+            raise RuntimeError("Call load() before score_options().")
+        scores = {}
+        for opt in options:
+            marker = f"{opt}. "
+            idx = prompt.find(marker)
+            if idx == -1:
+                scores[opt] = -5.0
+                continue
+            line_end = prompt.find("\n", idx)
+            line = prompt[idx + len(marker) : line_end if line_end != -1 else len(prompt)]
+            scores[opt] = -0.1 if line.strip() == self._target_text else -3.0
+        return ModelOptionScoreResult(scores=scores, raw_logprobs=dict(scores), metadata={})
+
+
+class TokenBiasedScoreBackend(DummyBackend):
+    """Test backend with pure token/position bias and zero content
+    knowledge: always scores the same letter highest no matter what content
+    sits under it. Used to verify Eq.(1) cancels out a permutation-invariant
+    bias to a uniform distribution over canonical content."""
+
+    def __init__(self, biased_letter: str, **kwargs):
+        super().__init__(**kwargs)
+        self._biased_letter = biased_letter
+
+    def score_options(self, prompt, options):
+        if not self._loaded:
+            raise RuntimeError("Call load() before score_options().")
+        scores = {opt: (-0.1 if opt == self._biased_letter else -3.0) for opt in options}
+        return ModelOptionScoreResult(scores=scores, raw_logprobs=dict(scores), metadata={})
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _PROMPTS_DIR = REPO_ROOT / "prompts"
@@ -134,34 +181,56 @@ class TestMajorityVote:
 class TestPermutationRunnerRunOne:
     def test_run_one_returns_dict(self, runner_question_row):
         """run_one should return a result dict without raising."""
-        b = DummyBackend(fixed_text="C")
+        b = ContentAwareScoreBackend(target_text="HTTPS")
         b.load()
         result = _make_runner(b).run_one(runner_question_row, sample_index=0)
         assert isinstance(result, dict)
 
-    def test_tie_broken_by_first_vote(self, runner_question_row):
-        """When all 4 permutations return 'C', tie-breaking gives canonical C — correct."""
-        # With fixed_text="C": each permutation returns C, which maps to a different
-        # canonical letter (cyclic unpermute produces [C, D, A, B]).
-        # All have count 1 → tie → first valid = C → correct.
-        b = DummyBackend(fixed_text="C")
+    def test_content_aware_backend_always_finds_correct_answer(self, runner_question_row):
+        """A backend with zero token bias (scores whichever letter HTTPS sits
+        under, regardless of position) must resolve to C (HTTPS) under Eq.(1)
+        un-permutation + averaging — the un-permutation must correctly track
+        content across all 4 rotations, not just trust letter position."""
+        b = ContentAwareScoreBackend(target_text="HTTPS")
         b.load()
         result = _make_runner(b).run_one(runner_question_row, sample_index=0)
 
         assert result["parsed_choice"] == "C"
         assert result["is_correct"] is True
         assert result["score_status"] == SCORE_CORRECT
+        assert result["parse_reason"] == "cyclic_eq1_avg"
 
-    def test_all_fail(self, runner_question_row, error_backend):
-        """All four backend calls fail — voted answer should be None."""
-        result = _make_runner(error_backend).run_one(runner_question_row, sample_index=0)
+    def test_pure_token_bias_debiased_to_uniform(self, runner_question_row):
+        """A backend with pure token/position bias (always favors letter A
+        regardless of content) must be debiased by Eq.(1)'s cyclic averaging
+        to a perfectly uniform distribution over canonical content -- this
+        is the entire theoretical point of cyclic-permutation debiasing.
+        Verified directly against the row's stored probabilities, not just
+        the final argmax (which would tie-break arbitrarily on a uniform
+        distribution)."""
+        b = TokenBiasedScoreBackend(biased_letter="A")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
+
+        probs = json.loads(result["cyclic_probs_json"])
+        values = list(probs.values())
+        assert len(values) == 4
+        for v in values:
+            assert v == pytest.approx(0.25, abs=1e-9)
+
+    def test_all_fail(self, runner_question_row):
+        """All four score_options() calls fail — parsed answer should be None."""
+        b = ErrorScoreBackend()
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
 
         assert result["parsed_choice"] is None
         assert result["is_correct"] is None
+        assert result["cyclic_probs_json"] is None
 
     def test_result_row_has_metadata(self, runner_question_row):
         """Result row should carry trace metadata."""
-        b = DummyBackend(fixed_text="C")
+        b = ContentAwareScoreBackend(target_text="HTTPS")
         b.load()
         result = _make_runner(b, method_name="cyclic").run_one(
             runner_question_row, sample_index=0
@@ -173,7 +242,7 @@ class TestPermutationRunnerRunOne:
 
     def test_latency_is_sum_of_all_calls(self, runner_question_row):
         """latency_seconds covers all 4 permutation calls (non-negative float)."""
-        b = DummyBackend(fixed_text="C")
+        b = ContentAwareScoreBackend(target_text="HTTPS")
         b.load()
         result = _make_runner(b).run_one(runner_question_row, sample_index=0)
 
@@ -183,7 +252,7 @@ class TestPermutationRunnerRunOne:
     def test_missing_fourth_option_has_no_phantom_choice(self, runner_question_row):
         """A 3-option question must rotate only 3 real options, never a phantom D."""
         row = dict(runner_question_row, choice_d=float("nan"))
-        b = DummyBackend(fixed_text="C")
+        b = ContentAwareScoreBackend(target_text="HTTPS")
         b.load()
         result = _make_runner(b).run_one(row, sample_index=0)
 
@@ -191,3 +260,28 @@ class TestPermutationRunnerRunOne:
         assert "D." not in result["prompt"]
         assert result["parsed_choice"] == "C"
         assert result["is_correct"] is True
+
+    def test_partial_permutation_failure_still_answers(self, runner_question_row):
+        """If only some of the 4 score_options() calls fail, the question
+        should still be answered (uniform-row fallback for the failed
+        permutations, same precedent as PriDeRunner._cyclic_rollout_prob_matrix),
+        not treated as a total failure."""
+
+        class FlakyBackend(ContentAwareScoreBackend):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self._call_count = 0
+
+            def score_options(self, prompt, options):
+                self._call_count += 1
+                if self._call_count == 1:
+                    raise RuntimeError("simulated transient failure")
+                return super().score_options(prompt, options)
+
+        b = FlakyBackend(target_text="HTTPS")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
+
+        assert result["parsed_choice"] == "C"
+        assert result["is_correct"] is True
+        assert result["cyclic_permutation_failures"] == 1

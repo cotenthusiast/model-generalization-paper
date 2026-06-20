@@ -19,6 +19,9 @@ _spec.loader.exec_module(_evaluate_run)
 apply_baseline_fallback = _evaluate_run.apply_baseline_fallback
 compute_accuracy = _evaluate_run.compute_accuracy
 reparse_run = _evaluate_run.reparse_run
+rematch_abcd_rows = _evaluate_run.rematch_abcd_rows
+rematch_text_extraction_rows = _evaluate_run.rematch_text_extraction_rows
+rematch_additional_option_rows = _evaluate_run.rematch_additional_option_rows
 
 
 # ---------------------------------------------------------------------------
@@ -332,3 +335,396 @@ class TestReparseRunSkipsScoreOptionsMethods:
         row = result[result["method_name"] == "baseline"].iloc[0]
         assert row["parsed_choice"] == "C"
         assert row["is_correct"] == True  # noqa: E712
+
+
+class TestReparseRunSkipsEmbeddingMatchMethods:
+    """abcd and text_extraction pick their answer via sentence-embedding
+    cosine similarity against the free-text response, not the plain
+    letter/text-match parser. Their raw_text is real prose (dash-labeled or
+    letter-suppressed), so re-parsing it with parse_model_answer can find a
+    spurious bare letter (e.g. the indefinite article "A") and silently
+    overwrite a correct embedding-based match — reparse_run must skip them."""
+
+    @pytest.fixture
+    def df_with_embedding_match_methods(self):
+        return pd.DataFrame(
+            [
+                _reparsable_row(
+                    question_id="q1",
+                    method_name="abcd",
+                    raw_text=(
+                        "A permutation can be a product of disjoint cycles, "
+                        "which is the right answer."
+                    ),
+                    parse_reason="Embedding cosine match to option C (score=0.412)",
+                    parsed_choice="C",
+                    is_correct=True,
+                ),
+                _reparsable_row(
+                    question_id="q1",
+                    method_name="text_extraction",
+                    raw_text=(
+                        "A permutation can be a product of disjoint cycles, "
+                        "which is the right answer."
+                    ),
+                    parse_reason="Embedding cosine match to option C (score=0.388)",
+                    parsed_choice="C",
+                    is_correct=True,
+                ),
+                _reparsable_row(
+                    question_id="q1",
+                    method_name="additional_option",
+                    raw_text="A permutation can be a product of disjoint cycles.",
+                    parse_reason="Jaccard text match to option C (score=0.250)",
+                    parsed_choice="C",
+                    is_correct=True,
+                ),
+            ]
+        )
+
+    def test_abcd_row_left_unchanged(self, df_with_embedding_match_methods):
+        result = reparse_run(df_with_embedding_match_methods)
+        row = result[result["method_name"] == "abcd"].iloc[0]
+        assert row["parsed_choice"] == "C"
+        assert row["is_correct"] == True  # noqa: E712
+
+    def test_text_extraction_row_left_unchanged(self, df_with_embedding_match_methods):
+        result = reparse_run(df_with_embedding_match_methods)
+        row = result[result["method_name"] == "text_extraction"].iloc[0]
+        assert row["parsed_choice"] == "C"
+        assert row["is_correct"] == True  # noqa: E712
+
+    def test_additional_option_row_left_unchanged(self, df_with_embedding_match_methods):
+        result = reparse_run(df_with_embedding_match_methods)
+        row = result[result["method_name"] == "additional_option"].iloc[0]
+        assert row["parsed_choice"] == "C"
+        assert row["is_correct"] == True  # noqa: E712
+
+
+# ---------------------------------------------------------------------------
+# rematch_abcd_rows
+# ---------------------------------------------------------------------------
+
+
+def _abcd_row(*, free_text_response: str, correct_option: str = "C") -> dict:
+    return {
+        "method_name": "abcd",
+        "model_name": "Qwen/Qwen2.5-7B-Instruct",
+        "choice_a": "FTP",
+        "choice_b": "HTTP",
+        "choice_c": "HTTPS",
+        "choice_d": "SMTP",
+        "correct_option": correct_option,
+        "free_text_response": free_text_response,
+        "parsed_choice": None,
+        "is_correct": None,
+    }
+
+
+class TestRematchAbcdRows:
+    """rematch_abcd_rows re-derives parsed_choice/is_correct for abcd rows
+    from the saved free_text_response, using a small embedding model
+    injected explicitly to avoid downloading the 600M-param production
+    model in tests."""
+
+    _SMALL_MODEL = "all-MiniLM-L6-v2"
+
+    def test_no_op_when_no_abcd_rows_present(self, tmp_path):
+        df = pd.DataFrame(
+            [{"method_name": "baseline", "parsed_choice": "A", "is_correct": True}]
+        )
+        result = rematch_abcd_rows(df, embedding_model=self._SMALL_MODEL, cache_dir=tmp_path)
+        pd.testing.assert_frame_equal(result, df)
+
+    def test_matches_exact_option_text(self, tmp_path):
+        df = pd.DataFrame([_abcd_row(free_text_response="HTTPS")])
+        result = rematch_abcd_rows(df, embedding_model=self._SMALL_MODEL, cache_dir=tmp_path)
+        row = result.iloc[0]
+        assert row["parsed_choice"] == "C"
+        assert row["is_correct"] == True  # noqa: E712
+
+    def test_isolates_final_answer_from_longer_response(self, tmp_path):
+        free_text = (
+            "Some might think this relates to a different protocol entirely, "
+            "but on reflection the answer is HTTPS."
+        )
+        df = pd.DataFrame([_abcd_row(free_text_response=free_text)])
+        result = rematch_abcd_rows(df, embedding_model=self._SMALL_MODEL, cache_dir=tmp_path)
+        row = result.iloc[0]
+        assert row["parsed_choice"] == "C"
+        assert row["is_correct"] == True  # noqa: E712
+
+    def test_cache_hit_avoids_reloading_model(self, tmp_path, monkeypatch):
+        """Second call with the same rows must not re-load SentenceTransformer."""
+        df = pd.DataFrame([_abcd_row(free_text_response="HTTPS")])
+        rematch_abcd_rows(df, embedding_model=self._SMALL_MODEL, cache_dir=tmp_path)
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("SentenceTransformer should not be constructed on a cache hit")
+
+        monkeypatch.setattr(
+            "sentence_transformers.SentenceTransformer", fail_if_called
+        )
+        result = rematch_abcd_rows(df, embedding_model=self._SMALL_MODEL, cache_dir=tmp_path)
+        assert result.iloc[0]["parsed_choice"] == "C"
+
+    def test_multiple_rows_batched_without_cross_contamination(self, tmp_path):
+        """All rows' texts are encoded in one batched call — each row must
+        still resolve to its own correct option, not another row's."""
+        df = pd.DataFrame(
+            [
+                _abcd_row(free_text_response="HTTPS", correct_option="C"),
+                _abcd_row(free_text_response="FTP", correct_option="A"),
+                _abcd_row(free_text_response="SMTP", correct_option="D"),
+            ]
+        )
+        result = rematch_abcd_rows(df, embedding_model=self._SMALL_MODEL, cache_dir=tmp_path)
+        assert list(result["parsed_choice"]) == ["C", "A", "D"]
+        assert list(result["is_correct"]) == [True, True, True]
+
+    def test_other_methods_untouched(self, tmp_path):
+        df = pd.DataFrame(
+            [
+                _abcd_row(free_text_response="HTTPS"),
+                {
+                    "method_name": "baseline",
+                    "parsed_choice": "Z",
+                    "is_correct": False,
+                    "free_text_response": None,
+                    "choice_a": "FTP",
+                    "choice_b": "HTTP",
+                    "choice_c": "HTTPS",
+                    "choice_d": "SMTP",
+                    "correct_option": "C",
+                    "model_name": "Qwen/Qwen2.5-7B-Instruct",
+                },
+            ]
+        )
+        result = rematch_abcd_rows(df, embedding_model=self._SMALL_MODEL, cache_dir=tmp_path)
+        baseline_row = result[result["method_name"] == "baseline"].iloc[0]
+        assert baseline_row["parsed_choice"] == "Z"
+        assert baseline_row["is_correct"] == False  # noqa: E712
+
+    def test_leading_letter_resolved_without_loading_model(self, tmp_path, monkeypatch):
+        """A declared leading letter must bypass the embedding model
+        entirely (no SentenceTransformer construction at all), not just hit
+        a warm cache."""
+        df = pd.DataFrame([_abcd_row(free_text_response="C. HTTPS is correct.")])
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("SentenceTransformer should not be constructed for a leading-letter row")
+
+        monkeypatch.setattr("sentence_transformers.SentenceTransformer", fail_if_called)
+        result = rematch_abcd_rows(df, embedding_model=self._SMALL_MODEL, cache_dir=tmp_path)
+        assert result.iloc[0]["parsed_choice"] == "C"
+        assert result.iloc[0]["best_similarity_score"] == 1.0
+
+    def test_cue_stated_letter_resolved_without_loading_model(self, tmp_path, monkeypatch):
+        """A letter stated via an explicit cue within the isolated span must
+        also bypass the embedding model -- the original gap this shortcut
+        closes (an unscorable result from embedding "the answer is C"
+        against option text)."""
+        df = pd.DataFrame(
+            [
+                _abcd_row(
+                    free_text_response=(
+                        "HTTPS is used for secure browsing. Therefore, the best answer is C."
+                    )
+                )
+            ]
+        )
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("SentenceTransformer should not be constructed for a cue-stated-letter row")
+
+        monkeypatch.setattr("sentence_transformers.SentenceTransformer", fail_if_called)
+        result = rematch_abcd_rows(df, embedding_model=self._SMALL_MODEL, cache_dir=tmp_path)
+        assert result.iloc[0]["parsed_choice"] == "C"
+        assert result.iloc[0]["best_similarity_score"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# rematch_text_extraction_rows
+# ---------------------------------------------------------------------------
+
+
+def _text_extraction_row(*, free_text_response: str, correct_option: str = "C") -> dict:
+    return {
+        "method_name": "text_extraction",
+        "model_name": "Qwen/Qwen2.5-7B-Instruct",
+        "choice_a": "FTP",
+        "choice_b": "HTTP",
+        "choice_c": "HTTPS",
+        "choice_d": "SMTP",
+        "correct_option": correct_option,
+        "free_text_response": free_text_response,
+        "parsed_choice": None,
+        "is_correct": None,
+    }
+
+
+class TestRematchTextExtractionRows:
+    """rematch_text_extraction_rows re-derives parsed_choice/is_correct for
+    text_extraction rows from the saved free_text_response. Shares
+    _rematch_with_embedding_fallback with rematch_abcd_rows, so this focuses
+    on text_extraction-specific behavior (its default similarity_threshold
+    is 0.1, not abcd's -inf) rather than re-testing shared machinery."""
+
+    _SMALL_MODEL = "all-MiniLM-L6-v2"
+
+    def test_no_op_when_no_text_extraction_rows_present(self, tmp_path):
+        df = pd.DataFrame(
+            [{"method_name": "baseline", "parsed_choice": "A", "is_correct": True}]
+        )
+        result = rematch_text_extraction_rows(df, embedding_model=self._SMALL_MODEL, cache_dir=tmp_path)
+        pd.testing.assert_frame_equal(result, df)
+
+    def test_matches_exact_option_text(self, tmp_path):
+        df = pd.DataFrame([_text_extraction_row(free_text_response="HTTPS")])
+        result = rematch_text_extraction_rows(df, embedding_model=self._SMALL_MODEL, cache_dir=tmp_path)
+        row = result.iloc[0]
+        assert row["parsed_choice"] == "C"
+        assert row["is_correct"] == True  # noqa: E712
+
+    def test_leading_letter_resolved_without_loading_model(self, tmp_path, monkeypatch):
+        df = pd.DataFrame([_text_extraction_row(free_text_response="C. HTTPS is correct.")])
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("SentenceTransformer should not be constructed for a leading-letter row")
+
+        monkeypatch.setattr("sentence_transformers.SentenceTransformer", fail_if_called)
+        result = rematch_text_extraction_rows(df, embedding_model=self._SMALL_MODEL, cache_dir=tmp_path)
+        assert result.iloc[0]["parsed_choice"] == "C"
+
+    def test_below_threshold_is_unscorable(self, tmp_path):
+        """text_extraction's default threshold (0.1) must be applied to the
+        embedding-fallback path, unlike abcd's -inf (always argmax)."""
+        df = pd.DataFrame([_text_extraction_row(free_text_response="completely unrelated text xyz")])
+        result = rematch_text_extraction_rows(
+            df, similarity_threshold=0.9, embedding_model=self._SMALL_MODEL, cache_dir=tmp_path
+        )
+        row = result.iloc[0]
+        assert row["parsed_choice"] is None
+        assert row["parse_status"] == "parse_missing"
+
+    def test_cache_does_not_bake_in_threshold(self, tmp_path):
+        """Same (span, options) pair rematched with two different thresholds
+        must not reuse a stale threshold-derived status from the cache --
+        the cache stores raw scores, and the threshold is applied on read."""
+        df = pd.DataFrame([_text_extraction_row(free_text_response="completely unrelated text xyz")])
+        lenient = rematch_text_extraction_rows(
+            df, similarity_threshold=0.0, embedding_model=self._SMALL_MODEL, cache_dir=tmp_path
+        )
+        strict = rematch_text_extraction_rows(
+            df, similarity_threshold=0.99, embedding_model=self._SMALL_MODEL, cache_dir=tmp_path
+        )
+        assert lenient.iloc[0]["parse_status"] == "parse_ok"
+        assert strict.iloc[0]["parse_status"] == "parse_missing"
+
+    def test_other_methods_untouched(self, tmp_path):
+        df = pd.DataFrame(
+            [
+                _text_extraction_row(free_text_response="HTTPS"),
+                {
+                    "method_name": "baseline",
+                    "parsed_choice": "Z",
+                    "is_correct": False,
+                    "free_text_response": None,
+                    "choice_a": "FTP",
+                    "choice_b": "HTTP",
+                    "choice_c": "HTTPS",
+                    "choice_d": "SMTP",
+                    "correct_option": "C",
+                    "model_name": "Qwen/Qwen2.5-7B-Instruct",
+                },
+            ]
+        )
+        result = rematch_text_extraction_rows(df, embedding_model=self._SMALL_MODEL, cache_dir=tmp_path)
+        baseline_row = result[result["method_name"] == "baseline"].iloc[0]
+        assert baseline_row["parsed_choice"] == "Z"
+        assert baseline_row["is_correct"] == False  # noqa: E712
+
+
+# ---------------------------------------------------------------------------
+# rematch_additional_option_rows
+# ---------------------------------------------------------------------------
+
+
+def _additional_option_row(*, raw_text: str, correct_option: str = "C") -> dict:
+    return {
+        "method_name": "additional_option",
+        "model_name": "Qwen/Qwen2.5-7B-Instruct",
+        "choice_a": "FTP",
+        "choice_b": "HTTP",
+        "choice_c": "HTTPS",
+        "choice_d": "SMTP",
+        "correct_option": correct_option,
+        "raw_text": raw_text,
+        "parsed_choice": None,
+        "is_correct": None,
+    }
+
+
+class TestRematchAdditionalOptionRows:
+    """rematch_additional_option_rows re-derives parsed_choice/is_correct for
+    additional_option rows from the saved raw_text via Jaccard matching —
+    pure string operations, no model to load."""
+
+    def test_no_op_when_no_additional_option_rows_present(self):
+        df = pd.DataFrame(
+            [{"method_name": "baseline", "parsed_choice": "A", "is_correct": True}]
+        )
+        result = rematch_additional_option_rows(df)
+        pd.testing.assert_frame_equal(result, df)
+
+    def test_matches_exact_option_text(self):
+        df = pd.DataFrame([_additional_option_row(raw_text="HTTPS")])
+        result = rematch_additional_option_rows(df)
+        row = result.iloc[0]
+        assert row["parsed_choice"] == "C"
+        assert row["is_correct"] == True  # noqa: E712
+
+    def test_redesigned_eq6_rows_left_untouched(self):
+        """Regression test: rows collected under the score_options()-based
+        Eq.(6) redesign have raw_text=None and are already final at
+        collection time. Without the raw_text-presence guard, this function
+        would read raw_text=None as an empty response and overwrite an
+        already-correct parsed_choice with PARSE_MISSING."""
+        row = _additional_option_row(raw_text=None)
+        row["raw_text"] = None
+        row["parsed_choice"] = "D"
+        row["is_correct"] = False
+        row["parse_reason"] = "aoi_eq6_argmax_excluding_idk"
+        df = pd.DataFrame([row])
+        result = rematch_additional_option_rows(df)
+        pd.testing.assert_frame_equal(result, df)
+
+    def test_idk_response_matches_e_and_scores_incorrect(self):
+        df = pd.DataFrame([_additional_option_row(raw_text="I really don't know")])
+        result = rematch_additional_option_rows(df)
+        row = result.iloc[0]
+        assert row["parsed_choice"] == "E"
+        assert row["is_correct"] == False  # noqa: E712
+
+    def test_other_methods_untouched(self):
+        df = pd.DataFrame(
+            [
+                _additional_option_row(raw_text="HTTPS"),
+                {
+                    "method_name": "baseline",
+                    "parsed_choice": "Z",
+                    "is_correct": False,
+                    "raw_text": None,
+                    "choice_a": "FTP",
+                    "choice_b": "HTTP",
+                    "choice_c": "HTTPS",
+                    "choice_d": "SMTP",
+                    "correct_option": "C",
+                    "model_name": "Qwen/Qwen2.5-7B-Instruct",
+                },
+            ]
+        )
+        result = rematch_additional_option_rows(df)
+        baseline_row = result[result["method_name"] == "baseline"].iloc[0]
+        assert baseline_row["parsed_choice"] == "Z"
+        assert baseline_row["is_correct"] == False  # noqa: E712

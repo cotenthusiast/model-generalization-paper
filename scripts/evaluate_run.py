@@ -10,14 +10,18 @@ import yaml
 from scipy.stats import beta as _beta_dist
 
 from modelgen.config.experiment import (
+    ABCD_METHOD,
+    ADDITIONAL_OPTION_METHOD,
     BASELINE_METHOD,
     CALIBRATION_METHOD,
     PRIDE_METHOD,
+    TEXT_EXTRACTION_METHOD,
     TWOPROMPT_METHOD,
     TWOPROMPT_CYCLIC_METHOD,
 )
 from modelgen.config.paths import REPORTS_DIR, RUNS_DIR
 from modelgen.parsing.parser import parse_model_answer
+from modelgen.parsing.types import ParseResult
 from modelgen.scoring.scorer import score_prediction
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -119,11 +123,15 @@ def reparse_run(df: pd.DataFrame) -> pd.DataFrame:
     """Re-apply the current parser and scorer to eligible rows in-place.
 
     Only rows whose answer came from a single raw API response are re-parsed.
-    Rows produced by majority voting (cyclic / two_prompt_cyclic) store
-    parse_reason == "majority_vote" and raw_text from only one of the N
-    permutation calls — re-parsing them from that single raw_text would
-    discard the other permutations and corrupt the result.  Those rows are
-    left exactly as they were saved by the original run.
+    Rows produced by majority voting (cyclic's legacy aggregation /
+    two_prompt_cyclic) store parse_reason == "majority_vote" and raw_text
+    from only one of the N permutation calls — re-parsing them from that
+    single raw_text would discard the other permutations and corrupt the
+    result. Those rows are left exactly as they were saved by the original
+    run. The redesigned cyclic (parse_reason == "cyclic_eq1_avg") is
+    excluded for the same reason: it picks its answer via score_options()
+    probability averaging across permutations (Eq. 1), not text parsing,
+    and raw_text is always null for these rows.
 
     Eligible rows must additionally have model_status != "failure" so that
     raw_text is present.
@@ -131,6 +139,24 @@ def reparse_run(df: pd.DataFrame) -> pd.DataFrame:
     ``pride`` and ``calibration`` rows are also excluded: both methods pick
     their answer via backend.score_options() rather than generating text, so
     raw_text is always null for them and there is nothing to re-parse.
+
+    ``abcd`` and ``text_extraction`` rows are also excluded: both pick their
+    answer via sentence-embedding cosine similarity against the free-text
+    response (see match_free_text_to_options in runners/text_extraction.py),
+    not the plain letter/text-match parser this function applies. Re-parsing
+    their raw_text with parse_model_answer searches dash-labeled or
+    letter-suppressed free text for a bare A/B/C/D token and finds spurious
+    matches (e.g. the indefinite article "A" in "A permutation can be..."),
+    silently overwriting a correct embedding-based match with garbage.
+
+    ``additional_option`` rows are also excluded entirely: the redesigned
+    runner picks its answer via score_options() and Eq.(6) (argmax over real
+    options, excluding IDK — see match_options_via_scoring in
+    runners/additional_option.py), not the plain letter parser, and has no
+    raw_text either. (The legacy Jaccard-based rows this method used to
+    produce also had no business going through the plain letter parser, for
+    the same reason as abcd/text_extraction below — this exclusion covers
+    both eras of additional_option data.)
     """
     df = df.copy()
     # CSV loads can infer float64 for columns with NaNs; reparsing assigns bools.
@@ -140,8 +166,12 @@ def reparse_run(df: pd.DataFrame) -> pd.DataFrame:
     reparsable_mask = (
         (df["model_status"].fillna("") != "failure")
         & (df["parse_reason"].fillna("") != "majority_vote")
+        & (df["parse_reason"].fillna("") != "cyclic_eq1_avg")
         & (df["method_name"] != PRIDE_METHOD)
         & (df["method_name"] != CALIBRATION_METHOD)
+        & (df["method_name"] != ABCD_METHOD)
+        & (df["method_name"] != TEXT_EXTRACTION_METHOD)
+        & (df["method_name"] != ADDITIONAL_OPTION_METHOD)
     )
 
     parsed_choices = []
@@ -175,6 +205,309 @@ def reparse_run(df: pd.DataFrame) -> pd.DataFrame:
     df.loc[idx, "parse_reason"] = parse_reasons
     df.loc[idx, "is_correct"] = is_corrects
     df.loc[idx, "score_status"] = score_statuses
+
+    return df
+
+
+def _stage2_rematch_cache_key(span: str, options: dict[str, str]) -> str:
+    import hashlib
+
+    payload = span + "||" + "|".join(f"{k}={v}" for k, v in sorted(options.items()))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _rematch_with_embedding_fallback(
+    df: pd.DataFrame,
+    mask: pd.Series,
+    text_column: str,
+    default_embedding_model: str,
+    similarity_threshold: float,
+    cache_subdir: str,
+    embedding_model: str | None,
+    cache_dir: Path | None,
+) -> pd.DataFrame:
+    """Shared rematch core for abcd and text_extraction.
+
+    For every selected row: try the free, model-free shortcuts
+    (try_resolve_declared_letter — a declared leading letter, or a letter
+    stated via an explicit cue within the isolated answer span) first and
+    fill those in directly. Only rows where neither shortcut applies need
+    the embedding model, and those are cached on disk keyed by a hash of
+    (isolated span, option texts) per embedding model, under
+    ``.cache/<cache_subdir>/`` — so re-embedding only ever happens once per
+    distinct (span, options) pair, not once per evaluate_run.py invocation.
+
+    No-op (returns df unchanged) when mask selects no rows.
+    """
+    if not mask.any():
+        return df
+
+    import json
+
+    from modelgen.config.paths import ROOT_DIR
+    from modelgen.parsing.types import PARSE_MISSING, PARSE_OK
+    from modelgen.runners.text_extraction import extract_final_answer_span, try_resolve_declared_letter
+
+    model_name = embedding_model or default_embedding_model
+    cache_root = cache_dir or (ROOT_DIR / ".cache" / cache_subdir)
+    cache_path = cache_root / f"{model_name.replace('/', '_')}.json"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache: dict[str, dict] = json.loads(cache_path.read_text()) if cache_path.exists() else {}
+
+    df = df.copy()
+    if "is_correct" in df.columns:
+        df["is_correct"] = df["is_correct"].astype(object)
+
+    # Precompute (index, span, options, key) for every row that still needs
+    # the embedding model after the free shortcuts are applied directly.
+    row_info = []
+    for i in df.index[mask]:
+        row = df.loc[i]
+        options = {
+            letter: row[col]
+            for letter, col in (("A", "choice_a"), ("B", "choice_b"), ("C", "choice_c"), ("D", "choice_d"))
+            if pd.notna(row[col]) and str(row[col]).strip() != ""
+        }
+        raw_text = row.get(text_column)
+
+        shortcut = try_resolve_declared_letter(raw_text, options)
+        if shortcut is not None:
+            parse_result, score = shortcut
+            score_result = score_prediction(parse_result, row["correct_option"])
+            df.loc[i, "parsed_choice"] = parse_result.final_choice
+            df.loc[i, "parse_status"] = parse_result.status
+            df.loc[i, "normalized_text"] = parse_result.normalized_text
+            df.loc[i, "parse_reason"] = parse_result.reason
+            df.loc[i, "is_correct"] = score_result.is_correct
+            df.loc[i, "score_status"] = score_result.status
+            df.loc[i, "best_similarity_score"] = score
+            continue
+
+        span = extract_final_answer_span(raw_text)
+        key = _stage2_rematch_cache_key(span, options)
+        row_info.append((i, span, options, key))
+
+    misses = [info for info in row_info if info[3] not in cache]
+    if misses:
+        import torch
+        from sentence_transformers import SentenceTransformer
+
+        # Cap CPU threads so this doesn't compete for the whole machine
+        # alongside everything else the user has running.
+        torch.set_num_threads(4)
+
+        model = SentenceTransformer(model_name)
+
+        # Batch each chunk's rows' (span + option texts) into one encode()
+        # call instead of one call per row — letting SentenceTransformer's
+        # own internal batching vectorize across many rows at once is far
+        # faster on CPU than thousands of 5-text calls. Chunked by row
+        # (rather than one encode() call across all ~10k rows) to bound peak
+        # memory — encoding everything at once previously triggered an OOM
+        # kill. The cache is written after every chunk, not just once at the
+        # end, so a crash mid-run doesn't lose already-computed progress.
+        _ROWS_PER_CHUNK = 80
+        for chunk_start in range(0, len(misses), _ROWS_PER_CHUNK):
+            chunk_rows = misses[chunk_start : chunk_start + _ROWS_PER_CHUNK]
+
+            chunk_texts: list[str] = []
+            chunk_slices: list[tuple[int, list[str]]] = []
+            for _, span, options, _ in chunk_rows:
+                letters = list(options.keys())
+                start = len(chunk_texts)
+                chunk_texts.append(span)
+                chunk_texts.extend(options[letter] for letter in letters)
+                chunk_slices.append((start, letters))
+
+            embeddings = model.encode(
+                chunk_texts,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                batch_size=32,
+                show_progress_bar=True,
+            )
+
+            for (_, span, options, key), (start, letters) in zip(chunk_rows, chunk_slices):
+                if span.strip() == "":
+                    cache[key] = {"best_letter": None, "best_score": None, "normalized_text": span}
+                    continue
+
+                ft_emb = embeddings[start]
+                opt_embs = embeddings[start + 1 : start + 1 + len(letters)]
+                raw_sims = opt_embs @ ft_emb
+                scores = {letter: float(raw_sims[idx]) for idx, letter in enumerate(letters)}
+                best_letter = max(scores, key=scores.__getitem__)
+                best_score = scores[best_letter]
+
+                # Cache only the raw embedding result, not a threshold-derived
+                # status: the cache key doesn't encode similarity_threshold,
+                # so baking threshold-dependent PARSE_OK/PARSE_MISSING into
+                # the cached value would go stale if a future call used a
+                # different threshold against the same (span, options) pair.
+                cache[key] = {"best_letter": best_letter, "best_score": best_score, "normalized_text": span}
+
+            cache_path.write_text(json.dumps(cache))
+
+    for i, _, _, key in row_info:
+        cached = cache[key]
+        best_letter = cached["best_letter"]
+        best_score = cached["best_score"]
+        norm_text = cached["normalized_text"]
+
+        if best_letter is None:
+            parse_result = ParseResult(
+                final_choice=None,
+                status=PARSE_MISSING,
+                raw_text=None,
+                normalized_text=norm_text,
+                reason="Empty free-text response",
+            )
+        elif best_score < similarity_threshold:
+            parse_result = ParseResult(
+                final_choice=None,
+                status=PARSE_MISSING,
+                raw_text=None,
+                normalized_text=norm_text,
+                reason=f"Best similarity {best_score:.3f} below threshold {similarity_threshold:.3f}",
+            )
+        else:
+            parse_result = ParseResult(
+                final_choice=best_letter,
+                status=PARSE_OK,
+                raw_text=None,
+                normalized_text=norm_text,
+                reason=f"Embedding cosine match to option {best_letter} (score={best_score:.3f})",
+            )
+
+        score_result = score_prediction(parse_result, df.loc[i, "correct_option"])
+
+        df.loc[i, "parsed_choice"] = parse_result.final_choice
+        df.loc[i, "parse_status"] = parse_result.status
+        df.loc[i, "normalized_text"] = parse_result.normalized_text
+        df.loc[i, "parse_reason"] = parse_result.reason
+        df.loc[i, "is_correct"] = score_result.is_correct
+        df.loc[i, "score_status"] = score_result.status
+        df.loc[i, "best_similarity_score"] = best_score
+
+    return df
+
+
+def rematch_abcd_rows(
+    df: pd.DataFrame,
+    embedding_model: str | None = None,
+    cache_dir: Path | None = None,
+) -> pd.DataFrame:
+    """Re-run abcd's stage-2 resolution against already-saved free text.
+
+    Re-derives parsed_choice/is_correct from the saved free_text_response
+    column for every abcd row, regardless of what was stored at collection
+    time — no new model generation calls needed, since stage 1's output
+    never changes. Thin wrapper around _rematch_with_embedding_fallback;
+    see that function for the shortcut/caching/batching details.
+
+    No-op (returns df unchanged) when no abcd rows are present.
+
+    ``embedding_model`` defaults to the production model (Qwen3-Embedding-0.6B);
+    tests pass a small model explicitly to avoid downloading a 600M-param model.
+    """
+    from modelgen.runners.text_extraction import _ABCD_EMBEDDING_MODEL
+
+    return _rematch_with_embedding_fallback(
+        df,
+        mask=df["method_name"] == ABCD_METHOD,
+        text_column="free_text_response",
+        default_embedding_model=_ABCD_EMBEDDING_MODEL,
+        similarity_threshold=float("-inf"),
+        cache_subdir="abcd_rematch",
+        embedding_model=embedding_model,
+        cache_dir=cache_dir,
+    )
+
+
+def rematch_text_extraction_rows(
+    df: pd.DataFrame,
+    similarity_threshold: float = 0.1,
+    embedding_model: str | None = None,
+    cache_dir: Path | None = None,
+) -> pd.DataFrame:
+    """Re-run text_extraction's stage-2 resolution against already-saved free text.
+
+    Re-derives parsed_choice/is_correct from the saved free_text_response
+    column for every text_extraction row. Thin wrapper around
+    _rematch_with_embedding_fallback; see that function for the
+    shortcut/caching/batching details.
+
+    No-op (returns df unchanged) when no text_extraction rows are present.
+
+    ``similarity_threshold`` defaults to TextExtractionRunner's production
+    default (0.1); ``embedding_model`` defaults to the production model
+    (all-MiniLM-L6-v2).
+    """
+    from modelgen.runners.text_extraction import _DEFAULT_EMBEDDING_MODEL
+
+    return _rematch_with_embedding_fallback(
+        df,
+        mask=df["method_name"] == TEXT_EXTRACTION_METHOD,
+        text_column="free_text_response",
+        default_embedding_model=_DEFAULT_EMBEDDING_MODEL,
+        similarity_threshold=similarity_threshold,
+        cache_subdir="text_extraction_rematch",
+        embedding_model=embedding_model,
+        cache_dir=cache_dir,
+    )
+
+
+def rematch_additional_option_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Re-run additional_option's LEGACY Jaccard text match against
+    already-saved raw_text, for rows collected before the Eq.(6) redesign.
+
+    additional_option was redesigned to score every option (including IDK)
+    via score_options() and select via Eq.(6) (argmax restricted to the
+    real options, excluding IDK — see match_options_via_scoring in
+    runners/additional_option.py), with no free-text generation at all.
+    Rows collected under that design have no raw_text and are already
+    final at collection time; this function only re-derives rows from the
+    earlier free-text-generation + Jaccard-matching era (identified by
+    raw_text being genuinely present), so it never overwrites a redesigned
+    row's already-correct parsed_choice with a Jaccard-derived value
+    computed from nothing (raw_text=None would otherwise read as an empty
+    response and silently produce PARSE_MISSING).
+
+    No-op (returns df unchanged) when no additional_option rows with
+    raw_text are present.
+    """
+    mask = df["method_name"] == ADDITIONAL_OPTION_METHOD
+    if "raw_text" not in df.columns:
+        return df
+    mask = mask & df["raw_text"].notna()
+    if not mask.any():
+        return df
+
+    from modelgen.runners.additional_option import match_text_to_options_jaccard
+
+    df = df.copy()
+    if "is_correct" in df.columns:
+        df["is_correct"] = df["is_correct"].astype(object)
+
+    for i in df.index[mask]:
+        row = df.loc[i]
+        options = {
+            letter: row[col]
+            for letter, col in (("A", "choice_a"), ("B", "choice_b"), ("C", "choice_c"), ("D", "choice_d"))
+            if pd.notna(row[col]) and str(row[col]).strip() != ""
+        }
+        options["E"] = "I don't know"
+
+        parse_result, best_score = match_text_to_options_jaccard(row.get("raw_text"), options)
+        score_result = score_prediction(parse_result, row["correct_option"])
+
+        df.loc[i, "parsed_choice"] = parse_result.final_choice
+        df.loc[i, "parse_status"] = parse_result.status
+        df.loc[i, "normalized_text"] = parse_result.normalized_text
+        df.loc[i, "parse_reason"] = parse_result.reason
+        df.loc[i, "is_correct"] = score_result.is_correct
+        df.loc[i, "score_status"] = score_result.status
+        df.loc[i, "best_similarity_score"] = best_score
 
     return df
 
@@ -727,6 +1060,18 @@ def main() -> None:
 
     print("[eval] Re-parsing responses with current parser...")
     df = reparse_run(df)
+
+    if (df["method_name"] == ABCD_METHOD).any():
+        print("[eval] Re-matching abcd responses with current embedding config...")
+        df = rematch_abcd_rows(df)
+
+    if (df["method_name"] == TEXT_EXTRACTION_METHOD).any():
+        print("[eval] Re-matching text_extraction responses with current embedding config...")
+        df = rematch_text_extraction_rows(df)
+
+    if (df["method_name"] == ADDITIONAL_OPTION_METHOD).any():
+        print("[eval] Re-matching additional_option responses with current Jaccard config...")
+        df = rematch_additional_option_rows(df)
 
     if args.apply_fallback:
         print("[eval] Applying baseline fallback for unscorable two-stage rows...")
