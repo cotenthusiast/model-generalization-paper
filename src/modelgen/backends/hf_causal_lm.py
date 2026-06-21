@@ -125,6 +125,28 @@ class HFCausalLMBackend(LocalBackend):
             return next(self._model.parameters()).device
         return self._device
 
+    def _eos_token_ids(self) -> set[int]:
+        """Return every token id that ends generation for this model.
+
+        model.generate() stops on self._model.generation_config.eos_token_id
+        when no explicit eos_token_id override is passed — and for chat
+        models that id is often a list (e.g. Llama-3.1-Instruct's eot_id,
+        eom_id, and eos all stop generation; Qwen2.5-Instruct's chat turns
+        end on im_end, which can differ from the tokenizer's single
+        eos_token attribute). Comparing only against tokenizer.eos_token_id
+        mislabels a correctly early-stopped generation as "length" whenever
+        the model's generation_config lists a different/additional stop
+        token, which is the common case for chat-tuned models.
+        """
+        eos_ids = self._model.generation_config.eos_token_id
+        if eos_ids is None:
+            eos_ids = self._tokenizer.eos_token_id
+        if eos_ids is None:
+            return set()
+        if isinstance(eos_ids, int):
+            return {eos_ids}
+        return set(eos_ids)
+
     def generate(
         self,
         prompt: str,
@@ -161,7 +183,7 @@ class HFCausalLMBackend(LocalBackend):
         raw_text = self._tokenizer.decode(generated_ids, skip_special_tokens=True)
 
         last_token_id = outputs[0][-1].item()
-        finish_reason = "eos" if last_token_id == self._tokenizer.eos_token_id else "length"
+        finish_reason = "eos" if last_token_id in self._eos_token_ids() else "length"
 
         return ModelGenerationResult(
             raw_text=raw_text,

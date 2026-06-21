@@ -48,10 +48,18 @@ def _make_mock_tokenizer(
     return tok
 
 
-def _make_mock_model(vocab_size: int = 200, eos_token_id: int = 2):
-    """Mock model returning controlled generate output and logits."""
+def _make_mock_model(vocab_size: int = 200, eos_token_id: int = 2, generation_config_eos=None):
+    """Mock model returning controlled generate output and logits.
+
+    generation_config_eos defaults to eos_token_id (int or list) — matches
+    model.generate()'s real fallback to self.generation_config.eos_token_id
+    when no explicit eos_token_id override is passed to generate().
+    """
     model = MagicMock()
     model.eval.return_value = None
+    model.generation_config.eos_token_id = (
+        generation_config_eos if generation_config_eos is not None else eos_token_id
+    )
 
     # generate() returns (1, prompt_len + completion_len); last token is eos.
     model.generate.return_value = torch.tensor([[1, 2, 3, 100, eos_token_id]])
@@ -183,6 +191,45 @@ class TestHFCausalLMBackendGenerate:
         mock_tok = _make_mock_tokenizer(eos_token_id=2)
         mock_model = _make_mock_model(eos_token_id=2)
         mock_model.generate.return_value = torch.tensor([[1, 2, 3, 100, 99]])  # 99 != eos
+        mock_transformers.AutoTokenizer.from_pretrained.return_value = mock_tok
+        mock_transformers.AutoModelForCausalLM.from_pretrained.return_value = mock_model
+        backend.load()
+        assert backend.generate("q").finish_reason == "length"
+
+    def test_finish_reason_eos_when_stop_token_is_in_generation_config_list(
+            self, backend, mock_transformers,
+    ):
+        # Llama-3.1-Instruct-style generation_config: multiple valid stop
+        # tokens (e.g. eos, eom_id, eot_id), and the chat turn actually ends
+        # on one that differs from tokenizer.eos_token_id. Comparing only
+        # against tokenizer.eos_token_id (the pre-fix behavior) would
+        # mislabel this as "length" even though generation stopped correctly.
+        mock_tok = _make_mock_tokenizer(eos_token_id=128001)
+        mock_model = _make_mock_model(
+            eos_token_id=128009, generation_config_eos=[128001, 128008, 128009],
+        )
+        mock_transformers.AutoTokenizer.from_pretrained.return_value = mock_tok
+        mock_transformers.AutoModelForCausalLM.from_pretrained.return_value = mock_model
+        backend.load()
+        assert backend.generate("q").finish_reason == "eos"
+
+    def test_finish_reason_falls_back_to_tokenizer_eos_when_generation_config_has_none(
+            self, backend, mock_transformers,
+    ):
+        mock_tok = _make_mock_tokenizer(eos_token_id=2)
+        mock_model = _make_mock_model(eos_token_id=2, generation_config_eos=None)
+        mock_transformers.AutoTokenizer.from_pretrained.return_value = mock_tok
+        mock_transformers.AutoModelForCausalLM.from_pretrained.return_value = mock_model
+        backend.load()
+        assert backend.generate("q").finish_reason == "eos"
+
+    def test_finish_reason_length_when_stop_token_not_in_generation_config_list(
+            self, backend, mock_transformers,
+    ):
+        mock_tok = _make_mock_tokenizer(eos_token_id=128001)
+        mock_model = _make_mock_model(
+            eos_token_id=99, generation_config_eos=[128001, 128008, 128009],
+        )
         mock_transformers.AutoTokenizer.from_pretrained.return_value = mock_tok
         mock_transformers.AutoModelForCausalLM.from_pretrained.return_value = mock_model
         backend.load()
