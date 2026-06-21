@@ -1,6 +1,7 @@
 """Compute evaluation metrics for one experiment run."""
 
 import argparse
+import random
 import sys
 from pathlib import Path
 
@@ -226,7 +227,9 @@ def _rematch_with_embedding_fallback(
     embedding_model: str | None,
     cache_dir: Path | None,
 ) -> pd.DataFrame:
-    """Shared rematch core for abcd and text_extraction.
+    """Rematch core for text_extraction (rematch_abcd_rows has its own
+    implementation below, since abcd's paper-faithful cascade has no
+    declared-leading-letter shortcut to share with this one).
 
     For every selected row: try the free, model-free shortcuts
     (try_resolve_declared_letter — a declared leading letter, or a letter
@@ -402,26 +405,152 @@ def rematch_abcd_rows(
     Re-derives parsed_choice/is_correct from the saved free_text_response
     column for every abcd row, regardless of what was stored at collection
     time — no new model generation calls needed, since stage 1's output
-    never changes. Thin wrapper around _rematch_with_embedding_fallback;
-    see that function for the shortcut/caching/batching details.
+    never changes.
+
+    Uses abcd_extraction.extract_candidate_span (the paper's Appendix F.2
+    four-tier regex cascade), not text_extraction.py's shared
+    extract_final_answer_span/try_resolve_declared_letter -- those implement
+    a different (earliest-statement) heuristic for a condition not covered
+    by this paper, and rematching abcd rows with them would silently
+    overwrite the redesigned runner's paper-faithful parsed_choice with the
+    old mechanism's answer every time this script runs. Does not reuse
+    _rematch_with_embedding_fallback (below), which is now specific to
+    rematch_text_extraction_rows: that helper's declared-leading-letter
+    shortcut has no equivalent here, since abcd's prompt (Appendix F.3)
+    explicitly instructs the model not to write the option letter at all.
 
     No-op (returns df unchanged) when no abcd rows are present.
 
     ``embedding_model`` defaults to the production model (Qwen3-Embedding-0.6B);
     tests pass a small model explicitly to avoid downloading a 600M-param model.
     """
-    from modelgen.runners.text_extraction import _ABCD_EMBEDDING_MODEL
+    import json
 
-    return _rematch_with_embedding_fallback(
-        df,
-        mask=df["method_name"] == ABCD_METHOD,
-        text_column="free_text_response",
-        default_embedding_model=_ABCD_EMBEDDING_MODEL,
-        similarity_threshold=float("-inf"),
-        cache_subdir="abcd_rematch",
-        embedding_model=embedding_model,
-        cache_dir=cache_dir,
-    )
+    from modelgen.config.paths import ROOT_DIR
+    from modelgen.parsing.types import PARSE_MISSING, PARSE_OK
+    from modelgen.runners.abcd_extraction import extract_candidate_span
+    from modelgen.runners.text_extraction import _ABCD_EMBEDDING_MODEL
+    from modelgen.parsing.parser import normalize_output_text
+
+    mask = df["method_name"] == ABCD_METHOD
+    if not mask.any():
+        return df
+
+    model_name = embedding_model or _ABCD_EMBEDDING_MODEL
+    cache_root = cache_dir or (ROOT_DIR / ".cache" / "abcd_rematch")
+    cache_path = cache_root / f"{model_name.replace('/', '_')}.json"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache: dict[str, dict] = json.loads(cache_path.read_text()) if cache_path.exists() else {}
+
+    df = df.copy()
+    if "is_correct" in df.columns:
+        df["is_correct"] = df["is_correct"].astype(object)
+
+    # A truly empty response has no span to extract or embed at all -- the
+    # paper's random fallback (Appendix F.2) applies directly and never
+    # touches the embedding model. Rematching can't reproduce the exact
+    # random draw made at collection time (no seed is persisted per row),
+    # but any uniformly random choice is equally faithful to the paper's
+    # own protocol for this near-nonexistent edge case.
+    rng = random.Random(BOOTSTRAP_SEED)
+
+    row_info = []
+    for i in df.index[mask]:
+        row = df.loc[i]
+        options = {
+            letter: row[col]
+            for letter, col in (("A", "choice_a"), ("B", "choice_b"), ("C", "choice_c"), ("D", "choice_d"))
+            if pd.notna(row[col]) and str(row[col]).strip() != ""
+        }
+        normalized = normalize_output_text(row.get("free_text_response"))
+
+        if not normalized:
+            letter = rng.choice(list(options.keys()))
+            parse_result = ParseResult(
+                final_choice=letter,
+                status=PARSE_OK,
+                raw_text=None,
+                normalized_text=normalized,
+                reason="Random fallback: model produced no answer text",
+            )
+            score_result = score_prediction(parse_result, row["correct_option"])
+            df.loc[i, "parsed_choice"] = parse_result.final_choice
+            df.loc[i, "parse_status"] = parse_result.status
+            df.loc[i, "normalized_text"] = parse_result.normalized_text
+            df.loc[i, "parse_reason"] = parse_result.reason
+            df.loc[i, "is_correct"] = score_result.is_correct
+            df.loc[i, "score_status"] = score_result.status
+            df.loc[i, "best_similarity_score"] = None
+            continue
+
+        span = extract_candidate_span(normalized, options)
+        key = _stage2_rematch_cache_key(span, options)
+        row_info.append((i, span, options, key))
+
+    misses = [info for info in row_info if info[3] not in cache]
+    if misses:
+        import torch
+        from sentence_transformers import SentenceTransformer
+
+        torch.set_num_threads(4)
+        model = SentenceTransformer(model_name)
+
+        _ROWS_PER_CHUNK = 80
+        for chunk_start in range(0, len(misses), _ROWS_PER_CHUNK):
+            chunk_rows = misses[chunk_start : chunk_start + _ROWS_PER_CHUNK]
+
+            chunk_texts: list[str] = []
+            chunk_slices: list[tuple[int, list[str]]] = []
+            for _, span, options, _ in chunk_rows:
+                letters = list(options.keys())
+                start = len(chunk_texts)
+                chunk_texts.append(span)
+                chunk_texts.extend(options[letter] for letter in letters)
+                chunk_slices.append((start, letters))
+
+            embeddings = model.encode(
+                chunk_texts,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                batch_size=32,
+                show_progress_bar=True,
+            )
+
+            for (_, span, options, key), (start, letters) in zip(chunk_rows, chunk_slices):
+                ft_emb = embeddings[start]
+                opt_embs = embeddings[start + 1 : start + 1 + len(letters)]
+                raw_sims = opt_embs @ ft_emb
+                scores = {letter: float(raw_sims[idx]) for idx, letter in enumerate(letters)}
+                best_letter = max(scores, key=scores.__getitem__)
+                best_score = scores[best_letter]
+                cache[key] = {"best_letter": best_letter, "best_score": best_score, "normalized_text": span}
+
+            cache_path.write_text(json.dumps(cache))
+
+    for i, _, _, key in row_info:
+        cached = cache[key]
+        best_letter = cached["best_letter"]
+        best_score = cached["best_score"]
+        norm_text = cached["normalized_text"]
+
+        parse_result = ParseResult(
+            final_choice=best_letter,
+            status=PARSE_OK,
+            raw_text=None,
+            normalized_text=norm_text,
+            reason=f"Embedding cosine match to option {best_letter} (score={best_score:.3f})",
+        )
+        score_result = score_prediction(parse_result, df.loc[i, "correct_option"])
+
+        df.loc[i, "parsed_choice"] = parse_result.final_choice
+        df.loc[i, "parse_status"] = parse_result.status
+        df.loc[i, "normalized_text"] = parse_result.normalized_text
+        df.loc[i, "parse_reason"] = parse_result.reason
+        df.loc[i, "is_correct"] = score_result.is_correct
+        df.loc[i, "score_status"] = score_result.status
+        df.loc[i, "best_similarity_score"] = best_score
+
+    return df
 
 
 def rematch_text_extraction_rows(

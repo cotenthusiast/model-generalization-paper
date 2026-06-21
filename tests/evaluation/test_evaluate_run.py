@@ -505,25 +505,28 @@ class TestRematchAbcdRows:
         assert baseline_row["parsed_choice"] == "Z"
         assert baseline_row["is_correct"] == False  # noqa: E712
 
-    def test_leading_letter_resolved_without_loading_model(self, tmp_path, monkeypatch):
-        """A declared leading letter must bypass the embedding model
-        entirely (no SentenceTransformer construction at all), not just hit
-        a warm cache."""
+    def test_leading_letter_still_resolves_via_tier3_literal_match(self, tmp_path):
+        """Deliberate behavior change: the paper's cascade has no
+        declared-leading-letter shortcut (the Appendix F.3 prompt instructs
+        the model never to write one), so this case now resolves through
+        tier #3's literal option-text search (the restated "HTTPS" text),
+        not through a model-free letter shortcut -- it happens to still
+        land on the correct option here because the option text itself is
+        present, not because the leading "C." was specially recognized."""
         df = pd.DataFrame([_abcd_row(free_text_response="C. HTTPS is correct.")])
-
-        def fail_if_called(*args, **kwargs):
-            raise AssertionError("SentenceTransformer should not be constructed for a leading-letter row")
-
-        monkeypatch.setattr("sentence_transformers.SentenceTransformer", fail_if_called)
         result = rematch_abcd_rows(df, embedding_model=self._SMALL_MODEL, cache_dir=tmp_path)
         assert result.iloc[0]["parsed_choice"] == "C"
-        assert result.iloc[0]["best_similarity_score"] == 1.0
 
-    def test_cue_stated_letter_resolved_without_loading_model(self, tmp_path, monkeypatch):
-        """A letter stated via an explicit cue within the isolated span must
-        also bypass the embedding model -- the original gap this shortcut
-        closes (an unscorable result from embedding "the answer is C"
-        against option text)."""
+    def test_bare_cue_stated_letter_is_no_longer_specially_rescued(self, tmp_path):
+        """Deliberate behavior change: arXiv:2602.17445's cascade has no
+        equivalent of text_extraction's cue-stated-letter shortcut. "the
+        best answer is C." is captured whole by tier #1 ("answer is C."),
+        then embedded as literal text -- with no option text to match
+        against, the result is whatever the embedding model scores
+        highest, not necessarily the bare letter "C" itself. This is an
+        accepted, paper-faithful limitation: the Appendix F.3 prompt is
+        designed to stop models from writing bare letters in the first
+        place, so the cascade has no rescue path for when they do anyway."""
         df = pd.DataFrame(
             [
                 _abcd_row(
@@ -533,14 +536,9 @@ class TestRematchAbcdRows:
                 )
             ]
         )
-
-        def fail_if_called(*args, **kwargs):
-            raise AssertionError("SentenceTransformer should not be constructed for a cue-stated-letter row")
-
-        monkeypatch.setattr("sentence_transformers.SentenceTransformer", fail_if_called)
         result = rematch_abcd_rows(df, embedding_model=self._SMALL_MODEL, cache_dir=tmp_path)
-        assert result.iloc[0]["parsed_choice"] == "C"
-        assert result.iloc[0]["best_similarity_score"] == 1.0
+        assert result.iloc[0]["parsed_choice"] in ("A", "B", "C", "D")
+        assert result.iloc[0]["normalized_text"] == "answer is C."
 
 
 # ---------------------------------------------------------------------------

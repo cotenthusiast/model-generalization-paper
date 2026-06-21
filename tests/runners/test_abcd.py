@@ -144,12 +144,41 @@ class TestABCDRunnerRunOne:
         assert result["parsed_choice"] == "C"
         assert result["is_correct"] is True
 
-    def test_real_world_hedge_and_pivot_resolves_to_first_statement(self, runner_question_row):
-        """Regression test mirroring real Qwen-32B/ARC-Challenge abcd output:
-        the model states a correct answer first, then hedges and pivots to a
-        different option in a later sentence. Stage 2 must select the
-        earliest stated answer, not whatever the embedding-diluting hedge
-        pivots to."""
+    def test_prompt_instructs_answer_is_option_verbatim(self, runner_question_row):
+        """Stage 1 prompt must carry Appendix F.3/Figure 14's modification:
+        "the answer is $OPTION" plus the verbatim-repetition and no-letter
+        constraints, replacing the old "in your own words" instruction."""
+        b = DummyBackend(fixed_text="HTTPS")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
+
+        assert "the answer is $OPTION" in result["prompt"]
+        assert "repeated exactly" in result["prompt"]
+        assert "Do not write the option letter" in result["prompt"]
+        assert "in your own words" not in result["prompt"]
+
+    def test_empty_generation_triggers_random_fallback_not_unscorable(self, runner_question_row):
+        """Appendix F.2: "If the model does not produce an answer, we choose
+        a random answer" -- a genuinely empty stage-1 response must resolve
+        to one of the real options (and score), not come back unscorable."""
+        b = DummyBackend(fixed_text="")
+        b.load()
+        result = _make_runner(b).run_one(runner_question_row, sample_index=0)
+
+        assert result["parsed_choice"] in ("A", "B", "C", "D")
+        assert result["score_status"] in (SCORE_CORRECT, SCORE_INCORRECT)
+        assert result["best_similarity_score"] is None
+
+    def test_hedge_and_pivot_resolves_to_last_statement_per_paper_cascade(self, runner_question_row):
+        """Deliberate behavior change from this condition's pre-redesign
+        earliest-statement heuristic: arXiv:2602.17445 Appendix F.2's
+        regex cascade explicitly takes the *last* occurrence at every tier
+        (each tier's negative lookahead exists specifically to enforce
+        this), trading this repo's own empirical earliest-statement
+        preference for fidelity to the cited paper's literal mechanism. A
+        model that hedges and pivots to a different option after its first
+        statement now resolves to whatever it pivots to last, matching the
+        paper's tier #3 (literal option-text search, last occurrence)."""
         b = DummyBackend(
             fixed_text=(
                 "HTTPS is the correct protocol. "
@@ -161,5 +190,5 @@ class TestABCDRunnerRunOne:
         b.load()
         result = _make_runner(b).run_one(runner_question_row, sample_index=0)
 
-        assert result["parsed_choice"] == "C"
-        assert result["is_correct"] is True
+        assert result["parsed_choice"] == "D"
+        assert result["is_correct"] is False

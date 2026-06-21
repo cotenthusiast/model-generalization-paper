@@ -1,28 +1,32 @@
 # src/modelgen/runners/abcd.py
 
+import random
 from typing import Any
 
 from sentence_transformers import SentenceTransformer
 
 from modelgen.pipeline.prompt_builder import build_abcd_prompt
+from modelgen.runners.abcd_extraction import resolve_abcd_answer
 from modelgen.runners.local_base import LocalExperimentRunner
-from modelgen.runners.text_extraction import _ABCD_EMBEDDING_MODEL, resolve_stage2_answer
+from modelgen.runners.text_extraction import _ABCD_EMBEDDING_MODEL
 
 
 class ABCDRunner(LocalExperimentRunner):
     """Runner for the ABCD uniform-label condition.
 
-    Stage 1 presents all four options under neutral dash labels instead of
-    A/B/C/D letter labels, eliciting a free-text answer free of positional
-    letter cues. Stage 2 (resolve_stage2_answer, shared with
-    TextExtractionRunner) resolves a declared letter directly if the model
-    states one despite the dash labels, isolates the model's earliest
-    clearly-stated answer span otherwise, and falls back to
-    sentence-embedding cosine similarity against option text — no second
-    LLM call. No abstention threshold (always argmax over similarity), and a
-    dedicated embedding model rather than TextExtractionRunner's smaller
-    default. This is this codebase's own design for the condition, not a
-    verified reproduction of a specific published procedure.
+    Reproduces the "Matched-and-Dashed" (M&D) evaluation protocol of Nowak,
+    Cadet, and Chin, "ABCD: All Biases Come Disguised" (Dartmouth),
+    arXiv:2602.17445: Stage 1 presents all options under uniform dash labels
+    (Section 4) and a prompt modified per Appendix F.3/Figure 14 to elicit a
+    full-text answer that repeats the chosen option verbatim, instead of a
+    letter. Stage 2 (resolve_abcd_answer, abcd_extraction.py) isolates a
+    candidate answer span via the paper's four-tier regex cascade (Appendix
+    F.2) and resolves it to an option via sentence-embedding cosine
+    similarity (Section 4) -- no second LLM call. similarity_threshold
+    defaults to -inf (always argmax over similarity, never abstains): the
+    paper's own abstention path is the random fallback inside
+    resolve_abcd_answer for the case where the model produces no text at
+    all, not a similarity-threshold cutoff.
     """
 
     def __init__(
@@ -35,6 +39,7 @@ class ABCDRunner(LocalExperimentRunner):
         super().__init__(*args, **kwargs)
         self._similarity_threshold = similarity_threshold
         self._st_model = SentenceTransformer(embedding_model)
+        self._rng = random.Random(self.generation_config.seed)
 
     def run_one(self, question_row: Any, sample_index: int) -> dict:
         prompt = build_abcd_prompt(
@@ -49,11 +54,12 @@ class ABCDRunner(LocalExperimentRunner):
         best_similarity_score = None
 
         if generation_result is not None:
-            parsed_result, best_similarity_score = resolve_stage2_answer(
+            parsed_result, best_similarity_score = resolve_abcd_answer(
                 generation_result.raw_text,
                 self._build_options(question_row),
                 self._similarity_threshold,
                 self._st_model,
+                self._rng,
             )
             score_result = self._score(parsed_result, question_row["correct_option"])
 

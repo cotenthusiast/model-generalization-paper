@@ -5,4 +5,4 @@ Question: {question}
 Options:
 {options}
 
-Respond with a short direct answer in your own words.
+Think step by step and then finish your answer with "the answer is $OPTION" where OPTION is the correct option repeated exactly as it appears above. Do not alter the wording of the option. Do not write the option letter in your answer.

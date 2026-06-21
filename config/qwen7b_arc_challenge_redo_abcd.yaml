@@ -1,0 +1,63 @@
+# Qwen/Qwen2.5-7B-Instruct redo config — ARC-Challenge, 1000 questions.
+# Method: abcd only.
+#
+# Redesigned on 2026-06-21 for fidelity to Nowak, Cadet, and Chin, "ABCD:
+# All Biases Come Disguised" (arXiv:2602.17445):
+#   - Stage 1 prompt (prompts/v1/abcd.txt) now implements Appendix
+#     F.3/Figure 14's exact modification ("the answer is $OPTION", verbatim
+#     repetition required, no option letter) instead of the old generic
+#     "in your own words" instruction.
+#   - Stage 2 resolution (src/modelgen/runners/abcd_extraction.py, new)
+#     implements Appendix F.2's literal four-tier regex cascade
+#     (last-occurrence "answer is X", "Answer: X", literal option-text
+#     search, last-sentence fallback) instead of the old shared
+#     earliest-statement heuristic from text_extraction.py.
+#
+# similarity_threshold is set to -.inf, NOT the old 0.3: the paper has no
+# similarity-threshold abstention mechanism at all. Its only "no answer"
+# path is a uniformly random fallback, triggered only when the model
+# produces no text whatsoever (reported as occurring once across the
+# paper's entire MMLU-Pro evaluation) -- handled inside resolve_abcd_answer,
+# not via this threshold.
+#
+# Old pre-redesign abcd run data is archived under
+# runs_archive/abcd_v1_pre_paper_fidelity_redesign_20260621/ and is not
+# touched by this job.
+#
+# Run with: python scripts/run_experiment.py --config config/qwen7b_arc_challenge_redo_abcd.yaml --yes
+
+models:
+  Qwen/Qwen2.5-7B-Instruct:
+    model_path: Qwen/Qwen2.5-7B-Instruct
+    family: qwen
+    size_label: 7B
+    device: auto
+
+run:
+  temperature: 0.0
+  max_tokens: 500
+  seed: 42
+  prompt_version: "v1"
+
+  max_questions: 1000
+
+  checkpoint_every_n: 50
+
+  similarity_threshold: -.inf
+
+  fallback_on_parse_failure: false
+
+  jobs:
+    - model: Qwen/Qwen2.5-7B-Instruct
+      methods: [abcd]
+      benchmark: arc_challenge
+      split: robustness
+
+paths:
+  runs_dir: runs
+  checkpoints_dir: checkpoints
+  cache_dir: .cache/responses
+  reports_dir: reports
+  data_processed_dir: data/processed
+  data_splits_dir: data/splits
+  prompts_dir: prompts

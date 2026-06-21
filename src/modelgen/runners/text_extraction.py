@@ -15,9 +15,11 @@ from modelgen.runners.local_base import LocalExperimentRunner
 _DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 # Embedding model used for the abcd condition specifically (not used by
-# TextExtractionRunner, which keeps the smaller default above). This is an
-# independent design choice for this codebase, not a verified reproduction
-# of any specific published model/paper.
+# TextExtractionRunner, which keeps the smaller default above). Matches
+# Section 4 of Nowak, Cadet, and Chin, "ABCD: All Biases Come Disguised"
+# (arXiv:2602.17445), which specifies Qwen3-Embedding-0.6B with cosine
+# similarity for its M&D protocol's stage-2 matching -- verified directly
+# against the paper's PDF, not assumed.
 _ABCD_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 
 _FINAL_ANSWER_CUE_RE = re.compile(
