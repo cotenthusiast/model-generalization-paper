@@ -7,12 +7,37 @@ from pathlib import Path
 import pytest
 
 from modelgen.backends.dummy import DummyBackend
+from modelgen.backends.types import ModelOptionScoreResult
 from modelgen.runners.calibration import AnswerCalibrationRunner
 
 from tests.runners.conftest import ErrorScoreBackend
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _PROMPTS_DIR = REPO_ROOT / "prompts"
+
+
+class HighDScoreBackend(DummyBackend):
+    """D scores far higher than the real options whenever it's included in a
+    score_options() call against a real (non-neutral) prompt, but is not
+    boosted in the neutral calibration-prior prompt (_build_neutral_prompt
+    always uses question="N/A"). Simulates a model whose per-question logprob
+    for a never-shown "D" happens to be high even though the prior phase
+    never measured that elevated score — proof that a 3-option question
+    can't let D win just because the old hardcoded-ABCD code would have
+    asked for it and let it through.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.requested_option_sets: list[list[str]] = []
+
+    def score_options(self, prompt, options):
+        self.requested_option_sets.append(list(options))
+        is_neutral = "N/A" in prompt
+        scores = {letter: -2.0 for letter in options}
+        if "D" in options and not is_neutral:
+            scores["D"] = 5.0
+        return ModelOptionScoreResult(scores=scores, raw_logprobs=dict(scores), metadata={})
 
 
 def _make_runner(backend):
@@ -110,6 +135,28 @@ class TestAnswerCalibrationRunnerIntegration:
         assert "nan" not in rows[0]["prompt"].lower()
         assert "D." not in rows[0]["prompt"]
         assert rows[0]["model_status"] == "success"
+
+    def test_three_option_question_never_scores_or_selects_phantom_d(
+            self, runner_question_row,
+    ):
+        """A 3-option question (no choice_d) must never request, score, or
+        select "D" — even when the backend would make D win if it were ever
+        considered. Regression test for the hardcoded _OPTION_LETTERS bug at
+        calibration.py run_one (score_options was always called with all 4
+        letters regardless of how many real options the question had)."""
+        row = dict(runner_question_row, choice_d=float("nan"))
+        b = HighDScoreBackend()
+        b.load()
+        rows = _make_runner(b).run_many([row])
+
+        # b.requested_option_sets[0] is the one-time neutral calibration call
+        # (still all 4 letters, correctly); [1:] are the per-question calls,
+        # which must request only this question's 3 real letters.
+        assert all(set(opts) == {"A", "B", "C"} for opts in b.requested_option_sets[1:])
+
+        assert rows[0]["calibration_adjusted_choice"] != "D"
+        olj = json.loads(rows[0]["option_logprob_json"])
+        assert "D" not in olj
 
 
 class TestApplyCorrection:

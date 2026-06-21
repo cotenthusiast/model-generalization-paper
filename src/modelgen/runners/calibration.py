@@ -41,6 +41,12 @@ class AnswerCalibrationRunner(LocalExperimentRunner):
     def _run_calibration(self) -> dict[str, float]:
         """Score each option letter in a neutral context to estimate label bias.
 
+        Unlike run_one's per-question scoring, this phase has no real question
+        attached — the neutral prompt always presents all 4 letters as
+        placeholder options (see _build_neutral_prompt), so there's no
+        per-question option count to restrict to here. The full A-D set is
+        the correct choice for this phase, not the same bug as run_one's.
+
         Returns a dict mapping option letter to its log-prob prior.
         """
         prompt = self._build_neutral_prompt()
@@ -65,12 +71,19 @@ class AnswerCalibrationRunner(LocalExperimentRunner):
         )
 
     def run_one(self, question_row: Any, sample_index: int) -> dict:
-        """Score all options for one question, apply calibration correction, return result."""
+        """Score all options for one question, apply calibration correction, return result.
+
+        Scoring is restricted to this question's real option letters (e.g.
+        ["A","B","C"] for a 3-option ARC-Challenge item with no D) so a
+        nonexistent option is never scored and can never win the argmax in
+        _apply_correction.
+        """
         prompt = self._build_prompt(question_row)
+        letters = list(self._build_options(question_row).keys())
 
         start = time.perf_counter()
         try:
-            score_result_obj = self.backend.score_options(prompt, _OPTION_LETTERS)
+            score_result_obj = self.backend.score_options(prompt, letters)
             raw_scores = score_result_obj.scores
         except Exception as exc:
             latency = time.perf_counter() - start

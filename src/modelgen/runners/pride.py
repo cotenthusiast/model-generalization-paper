@@ -4,9 +4,12 @@
 
 Two-phase method:
   Phase 1 (calibration): estimate the model's positional bias prior P_eprior from a
-  held-out calibration set. For each calibration question, run 4 cyclic permutations
-  of the option text, collect a 4x4 probability matrix, apply Eq.(7) to extract a
-  per-question prior, then average across all calibration questions into one global prior.
+  held-out calibration set. For each calibration question, run N cyclic permutations
+  of the option text (N = that question's real option count — 3 for a 3-option
+  ARC-Challenge item with no D, 4 otherwise), collect an NxN probability matrix,
+  apply Eq.(7) to extract a per-question prior, then average across all calibration
+  questions into one global prior (per-letter masked average — see
+  pride_debias.average_prior_probability_dicts).
 
   Phase 2 (inference): for each eval question, get one score_options() call to obtain
   P_obs, then apply Eq.(8) — divide P_obs by P_eprior and renormalize — to get the
@@ -35,7 +38,7 @@ from modelgen.runners.pride_debias import (
     OPTION_LETTERS,
     CalibrationState,
     apply_debiased_choice_from_defaults,
-    average_prior_probability_vectors,
+    average_prior_probability_dicts,
     calibration_state_from_sidecar,
     calibration_state_uniform,
     equation7_prior_from_rollouts,
@@ -205,31 +208,32 @@ class PriDeRunner(LocalExperimentRunner):
         """Estimate P_eprior from calibration questions using Eq.(7).
 
         For each calibration question:
-          1. Run 4 cyclic permutations of the options through score_options() to get
-             a 4x4 probability matrix (rows=permutations, cols=letters A-D).
+          1. Run N cyclic permutations of the options through score_options() to get
+             an NxN probability matrix (rows=permutations, cols=that question's real
+             option letters — N=3 for a 3-option ARC-Challenge item, N=4 otherwise).
           2. Apply Eq.(7) — geometric mean across permutations in log space — to
-             extract a per-question positional prior vector.
+             extract a per-question positional prior vector over those N letters.
 
-        Then average all per-question priors into one global prior P_eprior.
+        Then average all per-question priors into one global prior P_eprior. A
+        question with fewer than 4 real options contributes to its real letters'
+        average only (see average_prior_probability_dicts) — it never contributes
+        a phantom/floor value for a letter it doesn't have.
         """
         if not cal_rows:
             logger.warning("PriDe: no calibration questions available — using uniform prior.")
             return calibration_state_uniform()
 
-        prior_vectors: list[np.ndarray] = []
+        prior_dicts: list[dict[str, float]] = []
         for row in cal_rows:
-            # Shape (4, 4): row k = probability distribution over A-D under permutation k.
-            roll_mat = self._cyclic_rollout_prob_matrix(row)
+            roll_mat, real_letters = self._cyclic_rollout_prob_matrix(row)
             # Eq.(7): geometric mean across permutations → per-question prior vector.
-            prior_vectors.append(equation7_prior_from_rollouts(roll_mat))
+            prior_vec = equation7_prior_from_rollouts(roll_mat)
+            prior_dicts.append({L: float(p) for L, p in zip(real_letters, prior_vec)})
 
-        # Arithmetic mean of all per-question priors → global P_eprior.
-        pep_global = average_prior_probability_vectors(prior_vectors)
+        # Per-letter masked mean of all per-question priors → global P_eprior.
+        pep_global = average_prior_probability_dicts(prior_dicts)
         return CalibrationState(
-            peprior_probs={
-                OPTION_LETTERS[i]: float(pep_global[i])
-                for i in range(len(OPTION_LETTERS))
-            },
+            peprior_probs=dict(pep_global),
             epsilon=1e-12,
             estimation_question_ids=(),
         )
@@ -256,18 +260,24 @@ class PriDeRunner(LocalExperimentRunner):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2))
 
-    def _cyclic_rollout_prob_matrix(self, question_row: Any) -> np.ndarray:
-        """Build the 4x4 probability matrix needed by Eq.(7) for one question.
+    def _cyclic_rollout_prob_matrix(
+            self, question_row: Any,
+    ) -> tuple[np.ndarray, list[str]]:
+        """Build the NxN probability matrix needed by Eq.(7) for one question.
 
-        Runs score_options() once per cyclic permutation of the option texts.
-        Each call shifts which content appears under which label (A/B/C/D) while
-        keeping the labels fixed, so position and content effects are separable
-        when the rows are averaged in log space by Eq.(7).
+        Runs score_options() once per cyclic permutation of the option texts,
+        restricted to this question's real option letters (N=3 for a 3-option
+        ARC-Challenge item with no D, N=4 otherwise — same pattern as
+        PermutationRunner.run_one). A nonexistent option is never scored, so it
+        can never leak a real-but-meaningless logprob into the rollout.
 
-        Returns shape (4, 4): mat[k, j] = P(model picks letter j | permutation k).
+        Returns (matrix, real_letters) where matrix has shape (N, N):
+        mat[k, j] = P(model picks letter real_letters[j] | permutation k).
         Falls back to a uniform row if score_options() raises.
         """
         canon = self._build_options(question_row)
+        real_letters = list(canon.keys())
+        n = len(real_letters)
         permutations = PermutationRunner._generate_permutations(canon)
         prompts = [
             PermutationRunner._build_permuted_prompt(
@@ -279,20 +289,21 @@ class PriDeRunner(LocalExperimentRunner):
         ]
 
         # Uniform fallback used when score_options() fails for a permutation.
-        uni = np.ones(len(OPTION_LETTERS), dtype=np.float64) / len(OPTION_LETTERS)
+        uni = np.ones(n, dtype=np.float64) / n
         rows: list[np.ndarray] = []
         for prompt in prompts:
             try:
-                score_result = self.backend.score_options(prompt, list(OPTION_LETTERS))
+                score_result = self.backend.score_options(prompt, real_letters)
                 lp = score_result.scores
                 # Convert raw log-probs dict → normalized probability vector (index = letter).
                 rows.append(
-                    logprob_map_to_label_distribution(lp) if lp else uni.copy()
+                    logprob_map_to_label_distribution(lp, letters=real_letters)
+                    if lp else uni.copy()
                 )
             except Exception:
                 rows.append(uni.copy())
 
-        return np.stack(rows, axis=0).astype(np.float64)
+        return np.stack(rows, axis=0).astype(np.float64), real_letters
 
     # ------------------------------------------------------------------
     # Inference — Phase 2
@@ -360,12 +371,18 @@ class PriDeRunner(LocalExperimentRunner):
     ) -> tuple[str | None, dict[str, float] | None, float, str | None]:
         """Run one score_options() call and apply Eq.(8) debiasing.
 
+        Restricted to this question's real option letters (e.g. ["A","B","C"]
+        for a 3-option ARC-Challenge item with no D) so a nonexistent option
+        is never scored and can never win the argmax.
+
         Returns (adjusted_letter, raw_logprobs, latency_seconds, error_message).
         adjusted_letter is None if score_options() failed or returned empty scores.
         """
+        real_letters = list(self._build_options(question_row).keys())
+
         start = time.perf_counter()
         try:
-            score_result_obj = self.backend.score_options(prompt, list(OPTION_LETTERS))
+            score_result_obj = self.backend.score_options(prompt, real_letters)
             lp_scores = score_result_obj.scores
         except Exception as exc:
             latency = time.perf_counter() - start
@@ -389,6 +406,7 @@ class PriDeRunner(LocalExperimentRunner):
         adjusted_letter = apply_debiased_choice_from_defaults(
             self._calibration_state,
             lp_scores,
+            letters=tuple(real_letters),
             eps_prob=1e-12,
         )
         return adjusted_letter, lp_scores, latency, None

@@ -5,12 +5,34 @@ import logging
 from pathlib import Path
 
 from modelgen.backends.dummy import DummyBackend
+from modelgen.backends.types import ModelOptionScoreResult
 from modelgen.runners.pride import PriDeRunner
 
 from tests.runners.conftest import ErrorScoreBackend
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _PROMPTS_DIR = REPO_ROOT / "prompts"
+
+
+class DGetsBoostedBackend(DummyBackend):
+    """D always scores far higher than A/B/C whenever it's included in a
+    score_options() call — simulates a model that finds the literal letter
+    "D" highly plausible regardless of context. Used to prove a 3-option
+    question's eval scoring and a 3-option calibration question's
+    permutation rollout can't ever request, score, or select a "D" that
+    isn't a real option for that question.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.requested_option_sets: list[list[str]] = []
+
+    def score_options(self, prompt, options):
+        self.requested_option_sets.append(list(options))
+        scores = {letter: -2.0 for letter in options}
+        if "D" in options:
+            scores["D"] = 5.0
+        return ModelOptionScoreResult(scores=scores, raw_logprobs=dict(scores), metadata={})
 
 
 def _make_runner(backend, tmp_path: Path, calibration_questions=None, calibration_n=0):
@@ -135,3 +157,41 @@ class TestPriDeRunnerIntegration:
 
         # If sidecar was reused, _calibration_ready should be True after the first run_many
         assert runner2._calibration_ready
+
+
+class TestPriDeThreeOptionQuestions:
+    """Regression coverage for the hardcoded OPTION_LETTERS bug: a 3-option
+    ARC-Challenge question (no choice_d) must never have "D" requested,
+    scored, or selected — neither for its own eval scoring nor when it's
+    drawn into the calibration/rollout pool used to fit the Eq.(7) prior."""
+
+    def test_eval_question_never_requests_or_selects_phantom_d(
+            self, runner_question_row, tmp_path,
+    ):
+        row = dict(runner_question_row, choice_d=float("nan"))
+        b = DGetsBoostedBackend()
+        b.load()
+        rows = _make_runner(b, tmp_path).run_many([row])
+
+        assert all(set(opts) == {"A", "B", "C"} for opts in b.requested_option_sets)
+        assert rows[0]["pride_adjusted_choice"] != "D"
+        olj = json.loads(rows[0]["option_logprob_json"])
+        assert "D" not in olj
+
+    def test_calibration_rollout_never_requests_phantom_d_for_three_option_question(
+            self, runner_question_row, tmp_path,
+    ):
+        cal_question = dict(runner_question_row, question_id="cal_3opt", choice_d=float("nan"))
+        b = DGetsBoostedBackend()
+        b.load()
+        runner = _make_runner(
+            b, tmp_path, calibration_questions=[cal_question], calibration_n=1,
+        )
+        rows = runner.run_many([runner_question_row])
+
+        # The first 3 recorded calls are the 3 cyclic permutations of the
+        # 3-option calibration question's rollout; none may request "D".
+        assert all(set(opts) <= {"A", "B", "C"} for opts in b.requested_option_sets[:3])
+
+        prior = json.loads(rows[0]["peprior_json"])
+        assert set(prior.keys()) == {"A", "B", "C", "D"}

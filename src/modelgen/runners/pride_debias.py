@@ -132,7 +132,13 @@ def equation8_debiased_content_probs(
 
 
 def average_prior_probability_vectors(vectors: list[np.ndarray]) -> np.ndarray:
-    """Mean of per-sample Eq.~(7) priors, renormalized."""
+    """Mean of per-sample Eq.~(7) priors, renormalized.
+
+    Requires every vector to be the same length — use
+    ``average_prior_probability_dicts`` when calibration questions can have
+    different real-option counts (e.g. a 3-option ARC-Challenge item mixed
+    in with 4-option items).
+    """
     if not vectors:
         u = np.ones(len(OPTION_LETTERS), dtype=np.float64) / len(OPTION_LETTERS)
         return u
@@ -141,6 +147,33 @@ def average_prior_probability_vectors(vectors: list[np.ndarray]) -> np.ndarray:
     m = np.clip(m, 1e-12, None)
     m = m / m.sum()
     return m
+
+
+def average_prior_probability_dicts(
+        dicts: list[Mapping[str, float]],
+        letters: tuple[str, ...] = OPTION_LETTERS,
+) -> dict[str, float]:
+    """Mean of per-question Eq.~(7) priors, masked per letter.
+
+    Each per-question dict only contains the letters that were real options
+    for that question — e.g. 3 entries (A, B, C) for a 3-option ARC-Challenge
+    item with no D. A letter's global average is taken only over the
+    questions that actually had that letter as a real option, so a question
+    missing D still contributes to A/B/C's average but is excluded from D's
+    rather than diluting it with a phantom or floor-filled value.
+    """
+    if not dicts:
+        uni = 1.0 / len(letters)
+        return {L: uni for L in letters}
+    out: dict[str, float] = {}
+    for L in letters:
+        vals = [float(d[L]) for d in dicts if L in d]
+        out[L] = sum(vals) / len(vals) if vals else 0.0
+    total = sum(out.values())
+    if total > 0:
+        return {L: v / total for L, v in out.items()}
+    uni = 1.0 / len(letters)
+    return {L: uni for L in letters}
 
 
 def dict_probs_to_ordered(prob_map: Mapping[str, float]) -> np.ndarray:
@@ -214,12 +247,23 @@ def apply_debiased_choice_from_defaults(
         state: CalibrationState,
         default_logp_map: Mapping[str, float],
         *,
+        letters: tuple[str, ...] = OPTION_LETTERS,
         eps_prob: float = 1e-12,
 ) -> str:
-    """Argmax Eq.~(8) over canonical content slots (letters A–D order)."""
-    default_probs = logprob_map_to_label_distribution(dict(default_logp_map), eps_prob=eps_prob)
-    pep = dict_probs_to_ordered(state.peprior_probs)
+    """Argmax Eq.~(8), restricted to ``letters`` — this question's real options.
+
+    ``letters`` defaults to the full A-D set but should be passed explicitly
+    as the question's real option letters (e.g. ("A","B","C") for a 3-option
+    ARC-Challenge item) so a non-existent option can never win the argmax.
+    The global prior is renormalized over just ``letters`` before the Eq.~(8)
+    division, since D's share of the global prior doesn't apply to a
+    question where D was never a real choice.
+    """
+    default_probs = logprob_map_to_label_distribution(
+        dict(default_logp_map), letters=letters, eps_prob=eps_prob
+    )
+    pep = np.array([float(state.peprior_probs.get(L, 0.0)) for L in letters], dtype=np.float64)
     pep = np.clip(pep, state.epsilon, None)
     pep = pep / pep.sum()
     deb_content = equation8_debiased_content_probs(default_probs, pep, eps=eps_prob)
-    return OPTION_LETTERS[int(np.argmax(deb_content))]
+    return letters[int(np.argmax(deb_content))]
