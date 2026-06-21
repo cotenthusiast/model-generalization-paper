@@ -35,6 +35,10 @@ data/reviews/*
 runs/*
 !runs/.gitkeep
 
+# Archived run outputs (preserved on disk for posterity, not in git history --
+# these are full CSV snapshots and bloat clones/pulls if committed)
+runs_archive/
+
 # Checkpoints
 checkpoints/
 
