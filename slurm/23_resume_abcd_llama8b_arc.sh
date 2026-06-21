@@ -58,7 +58,13 @@ export HF_HUB_CACHE="$HF_HOME/hub"
 export MODEL_ROOT="$SCRATCH/models"
 export RESULTS_DIR="$SCRATCH/results/mcq-generalization"
 
-module load python3/3.10.5/gcc-9.3.0
+# module command is currently unavailable in batch job shells on this
+# cluster (verified 2026-06-21 via diagnostic job — venv activation alone
+# already resolves to the correct interpreter, so this degrades gracefully
+# rather than aborting the whole job if the cluster module system is down).
+if command -v module >/dev/null 2>&1; then
+    module load python3/3.10.5/gcc-9.3.0
+fi
 
 source "$VENV_DIR/bin/activate"
 
