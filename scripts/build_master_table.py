@@ -70,6 +70,7 @@ EXPECTED_METHODS = [
     "additional_option",
     "text_extraction",
     "abcd",
+    "independent_hypothesis",
 ]
 EXPECTED_BENCHMARKS = ["mmlu", "arc_challenge"]
 
@@ -88,6 +89,8 @@ EXPECTED_BENCHMARKS = ["mmlu", "arc_challenge"]
 #     repeated every run (not amortized across reruns).
 #   - text_extraction / abcd: 1 call; stage 2 is deterministic embedding
 #     cosine similarity, not a second model call.
+#   - independent_hypothesis: 1 generate() call per real option (usually 4;
+#     3 for the rare ARC-Challenge question with no D choice).
 CALLS_PER_QUESTION = {
     "baseline": 1,
     "two_prompt": 2,
@@ -97,6 +100,7 @@ CALLS_PER_QUESTION = {
     "additional_option": 1,
     "text_extraction": 1,
     "abcd": 1,
+    "independent_hypothesis": 4,
 }
 
 CANONICAL_IDS = {

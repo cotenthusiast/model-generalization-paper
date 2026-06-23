@@ -15,6 +15,7 @@ from modelgen.config.experiment import (
     ADDITIONAL_OPTION_METHOD,
     BASELINE_METHOD,
     CALIBRATION_METHOD,
+    INDEPENDENT_HYPOTHESIS_METHOD,
     PRIDE_METHOD,
     TEXT_EXTRACTION_METHOD,
     TWOPROMPT_METHOD,
@@ -38,6 +39,7 @@ METHOD_ORDER = [
     "additional_option",
     "text_extraction",
     "abcd",
+    "independent_hypothesis",
 ]
 
 MODEL_ORDER = [
@@ -158,6 +160,15 @@ def reparse_run(df: pd.DataFrame) -> pd.DataFrame:
     produce also had no business going through the plain letter parser, for
     the same reason as abcd/text_extraction below — this exclusion covers
     both eras of additional_option data.)
+
+    ``independent_hypothesis`` rows are also excluded: the answer is the
+    argmax over N independently-scored option confidences (see
+    IndependentHypothesisRunner.run_one), not a letter stated in raw_text.
+    raw_text there is one option's isolated reasoning/confidence text (e.g.
+    "...<score>10</score>"), which was never a candidate to contain the
+    final answer letter at all — re-parsing it for a bare A/B/C/D token
+    finds spurious matches and overwrites a correct argmax-derived choice
+    with garbage.
     """
     df = df.copy()
     # CSV loads can infer float64 for columns with NaNs; reparsing assigns bools.
@@ -173,6 +184,7 @@ def reparse_run(df: pd.DataFrame) -> pd.DataFrame:
         & (df["method_name"] != ABCD_METHOD)
         & (df["method_name"] != TEXT_EXTRACTION_METHOD)
         & (df["method_name"] != ADDITIONAL_OPTION_METHOD)
+        & (df["method_name"] != INDEPENDENT_HYPOTHESIS_METHOD)
     )
 
     parsed_choices = []

@@ -14,6 +14,7 @@ CALIBRATION_METHOD = "calibration"
 ADDITIONAL_OPTION_METHOD = "additional_option"
 TEXT_EXTRACTION_METHOD = "text_extraction"
 ABCD_METHOD = "abcd"
+INDEPENDENT_HYPOTHESIS_METHOD = "independent_hypothesis"
 
 ALL_METHODS = [
     BASELINE_METHOD,

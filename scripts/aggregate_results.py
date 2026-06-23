@@ -20,6 +20,7 @@ METHOD_ORDER = [
     "additional_option",
     "text_extraction",
     "abcd",
+    "independent_hypothesis",
 ]
 
 MODEL_ORDER = [
