@@ -30,10 +30,19 @@
 # Observed rate from the original attempt: ~22 min/50 questions on MMLU.
 # Remaining 900 questions ≈ 6.6h; budgeted with margin.
 #
+# Bumped 10:00:00 -> 16:00:00: Qwen-32B's resume job (9211248, same model
+# family) showed the rate measured from the original truncated run
+# undershot the resumed run's actual rate by ~2x, and separately, the
+# bundled PriDe recompute's model reload (a few minutes for 32B, likely
+# more for 72B on 2 GPUs) was never budgeted at all -- it rode on
+# whatever margin was left from the (already too-tight) abcd estimate.
+# Doubling the slack here rather than re-deriving a number from the same
+# kind of estimate that just proved unreliable.
+#
 #SBATCH --job-name=mcqgen_resume_abcd_qwen72b_mmlu
 #SBATCH --output=logs/mcqgen_resume_abcd_qwen72b_mmlu_%j.out
 #SBATCH --error=logs/mcqgen_resume_abcd_qwen72b_mmlu_%j.err
-#SBATCH --time=10:00:00
+#SBATCH --time=16:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8

@@ -27,10 +27,17 @@
 # assumed close to its ARC rate, with margin for the assumption being an
 # extrapolation rather than a direct measurement.
 #
+# Bumped 12:00:00 -> 16:00:00: Qwen-32B's resume job (9211248) showed the
+# rate measured from the original truncated run undershot the resumed
+# run's actual rate by ~2x. This job's whole budget rests on an even less
+# direct extrapolation (Llama-70B's own MMLU rate was never measured at
+# all), so widening the margin rather than trusting an estimate of an
+# estimate.
+#
 #SBATCH --job-name=mcqgen_fresh_abcd_llama70b_mmlu
 #SBATCH --output=logs/mcqgen_fresh_abcd_llama70b_mmlu_%j.out
 #SBATCH --error=logs/mcqgen_fresh_abcd_llama70b_mmlu_%j.err
-#SBATCH --time=12:00:00
+#SBATCH --time=16:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8

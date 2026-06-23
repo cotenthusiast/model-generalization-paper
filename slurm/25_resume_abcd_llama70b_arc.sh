@@ -33,10 +33,20 @@
 # Remaining 50 questions at ~23.9 min/50q ≈ 24 min; budgeted with large
 # margin since model load alone takes a noticeable share of a short job.
 #
+# Bumped 02:00:00 -> 04:00:00 after Qwen-32B's resume job (9211248) finished
+# its abcd work fine but only cleared the bundled PriDe recompute's model
+# reload with ~6 minutes of margin left on a 4h budget: the per-question
+# rate measured from the original truncated run undershot the resumed
+# run's actual rate by ~2x, and the recompute step's own model reload
+# (separate process, several minutes for a 32B model) was never budgeted
+# at all. Both risks are worse for a 70B model on 2 GPUs, so doubling the
+# budget here rather than re-deriving a tighter number from numbers that
+# already proved unreliable once.
+#
 #SBATCH --job-name=mcqgen_resume_abcd_llama70b_arc
 #SBATCH --output=logs/mcqgen_resume_abcd_llama70b_arc_%j.out
 #SBATCH --error=logs/mcqgen_resume_abcd_llama70b_arc_%j.err
-#SBATCH --time=02:00:00
+#SBATCH --time=04:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
