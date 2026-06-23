@@ -1,6 +1,6 @@
 # MCQ Bias-Mitigation Scale-Generalisation
 
-This repository contains the experiment pipeline for a study on whether MCQ positional-bias mitigation methods generalise reliably across open-source model sizes and families. It extends a prior two-stage prompting study (see the `main` branch) which showed that naive prompting interventions fail to reduce MCQ positional bias and reduce end-to-end accuracy. This direction asks whether any existing method is stable across a controlled model scale ladder, or whether apparent gains are artefacts of testing on a narrow set of models. Models are run locally via HuggingFace `transformers` on Kelvin2 HPC. Benchmarks are MMLU and ARC-Challenge using the same 1,000-question robustness splits from the prior work, allowing direct comparison.
+This repository contains the experiment pipeline for a study on whether MCQ positional-bias mitigation methods generalise reliably across open-source model sizes and families. It extends a prior two-stage prompting study (separate repo: `two-stage-prompting-paper`) which showed that naive prompting interventions fail to reduce MCQ positional bias and reduce end-to-end accuracy. This direction asks whether any existing method is stable across a controlled model scale ladder, or whether apparent gains are artefacts of testing on a narrow set of models. Models are run locally via HuggingFace `transformers` on Kelvin2 HPC. Benchmarks are MMLU and ARC-Challenge using the same 1,000-question robustness splits from the prior work, allowing direct comparison.
 
 ---
 
@@ -16,11 +16,18 @@ config/
   qwen7b_arc_core.yaml         same as above for ARC-Challenge
   qwen7b_mmlu_expensive.yaml   1000 questions, Qwen 7B, expensive methods (two_prompt/cyclic/pride)
   qwen7b_arc_expensive.yaml    same as above for ARC-Challenge
+  ...                          the pattern above repeats per model (qwen7b/32b/72b, llama8b/70b) and
+                               per method group (*_text_extraction, *_abcd, *_independent_hypothesis,
+                               *_redo_*, rerun_*) — see `ls config/` for the full current matrix
 
 scripts/
   run_experiment.py            main runner: loads config, runs jobs, writes CSVs
   evaluate_run.py              computes accuracy, bias, overlap, and per-subject stats
   aggregate_results.py         builds paper tables (plain-text + LaTeX) from evaluate outputs
+  build_master_table.py        stitches the model x method x benchmark matrix across many run_id folders
+  build_merged_run.py          materializes a single merged run_id directory from that same scattered data
+  recompute_pride_calibration.py  one-off fix for a contaminated PriDe ARC-Challenge calibration prior
+  prepare_patch_checkpoints.py one-off fix for runner output contaminated by a prompt_builder bug
   prepare_data.py              one-time download and normalisation of MMLU and ARC-Challenge
   env_kelvin2.sh               source on Kelvin2 to set paths, load module, activate venv
 
@@ -31,6 +38,10 @@ slurm/
   03_tiny_real.sh              5-question real weights test, Qwen 0.5B
   04_full_run.sh               full-scale run job
   05_run_config.sh             reusable A100 MIG job; pass CONFIG= at submit time
+  06_run_config_a100.sh        reusable full-A100 job (larger models); pass CONFIG= at submit time
+  ...                          numbered scripts continue past 06 for per-model patch/redo/resume jobs
+                               and new methods as they're added (e.g. 30/31 for independent_hypothesis)
+                               — see `ls slurm/` for the current full list
 
 src/modelgen/
   backends/
@@ -48,10 +59,10 @@ src/modelgen/
     pride.py                   PriDe runner (calibration + Eq.(8) inference)
     calibration.py             answer-level calibration runner
     additional_option.py       additional-option ("I don't know") runner
-  clients/                     async cloud API clients (OpenAI, Gemini, Groq, Together)
-                               — retained from main branch; not used in local inference
+    text_extraction.py         text-extraction runner (free-text + embedding match)
+    abcd.py / abcd_extraction.py  ABCD uniform-label runner + its stage-2 extraction cascade
+    independent_hypothesis.py  per-option isolated confidence-scoring runner
   infra/
-    cache.py                   disk-backed JSON cache for cloud client responses
     checkpoint.py              per-job checkpoint manager for resumable runs
   benchmarks/                  MMLU and ARC-Challenge loaders and split builders
   config/
@@ -66,6 +77,9 @@ prompts/v1/
   direct_mcq.txt               template for single-turn MCQ prompts
   free_text.txt                template for two-stage Stage 1 (free-text answer)
   option_matching.txt          template for two-stage Stage 2 (option matching)
+  text_extraction.txt          template for the text-extraction condition
+  abcd.txt                     template for the ABCD uniform-label condition
+  independent_hypothesis.txt   template for per-option isolated hypothesis evaluation
 
 tests/                         pytest suite mirroring src/ structure
 data/processed/                normalised benchmark CSVs (gitignored, generate with prepare_data.py)
@@ -73,8 +87,11 @@ data/splits/                   split ID files (gitignored, generate with prepare
 runs/                          run output CSVs (gitignored)
 checkpoints/                   in-progress job state (gitignored)
 reports/                       evaluate_run.py and aggregate_results.py outputs (gitignored)
-.cache/responses/              cloud API response cache (gitignored)
 ```
+
+This repo has no `clients/` directory or `infra/cache.py` — those belong only
+to the companion `two-stage-prompting` repo (cloud API clients + response
+cache), which this repo never had since it's local-inference-only.
 
 ---
 
@@ -84,12 +101,15 @@ reports/                       evaluate_run.py and aggregate_results.py outputs 
 |---|---|---|---|
 | `baseline` | `DirectMCQRunner` | 1 | Presents the standard MCQ prompt and parses the first answer letter from the response. |
 | `two_prompt` | `TwoStageRunner` | 2 | Stage 1 elicits a free-text answer without showing options; Stage 2 asks the model to match that answer to one of the four options. |
-| `cyclic` | `PermutationRunner` | 4 | Runs four cyclic rotations of the option order, un-permutes each parsed answer back to canonical ordering, and selects the final answer by majority vote. |
-| `pride` | `PriDeRunner` | 1 + 4×calibration_n | Estimates a positional prior P_eprior from held-out calibration questions (Eq. 7), then applies Eq. 8 debiasing to `score_options()` logits at inference. Calibration is saved as a JSON sidecar and reused on reruns. |
+| `cyclic` | `PermutationRunner` | N (= real option count, usually 4) | Scores N cyclic rotations of the option order via `score_options()`, un-permutes each row's distribution back to canonical content identity, averages per Eq. (1) (Zheng et al. 2024), and takes the argmax of the averaged distribution. (Superseded the original generate()+parse+majority-vote design; that logic is kept as legacy/unused methods on the class for reproducing old run data.) |
+| `pride` | `PriDeRunner` | 1 + N×calibration_n | Estimates a positional prior P_eprior from held-out calibration questions (Eq. 7), then applies Eq. 8 debiasing to `score_options()` logits at inference. Calibration is saved as a JSON sidecar and reused on reruns. |
 | `calibration` | `AnswerCalibrationRunner` | 1 | Scores options against a content-free neutral prompt to estimate per-label bias, then subtracts that prior from real-question scores before picking the answer. |
-| `additional_option` | `AdditionalOptionRunner` | 1 | Same as baseline but adds a fifth option `E: I don't know` to the prompt. |
+| `additional_option` | `AdditionalOptionRunner` | 1 | Same as baseline but adds a fifth option `E: I don't know` to the prompt; argmax restricted to the 4 real options so IDK can never be selected. |
+| `text_extraction` | `TextExtractionRunner` | 1 | Shows all options with A/B/C/D labels but instructs free-text output (no letter); resolved via leading/cue-letter shortcuts or sentence-embedding cosine match — no second LLM call. |
+| `abcd` | `ABCDRunner` | 1 | Reproduces the "Matched-and-Dashed" protocol of Nowak, Cadet & Chin, "ABCD: All Biases Come Disguised" (arXiv:2602.17445): options shown under neutral dash labels (no letters at all), four-tier regex span extraction + embedding-similarity resolution. |
+| `independent_hypothesis` | `IndependentHypothesisRunner` | N (= real option count, usually 4) | Each option evaluated in total isolation — one `generate()` call per option framed as a hypothesis, scored via a `<score>0-100</score>` tag. Final prediction is the argmax of the parsed scores; ties broken by a seed derived from `(seed, question_id)`. |
 
-`pride` and `calibration` both require a backend that implements `score_options()` (first-token log-probability scoring). The local HF backend supports this; cloud backends do not (with the exception of Together AI in the `main` branch study).
+`pride`, `calibration`, and `cyclic` all require a backend that implements `score_options()` (first-token log-probability scoring). The local HF backend supports this; cloud backends mostly don't (Together AI is the exception, in the companion `two-stage-prompting` repo's study).
 
 ---
 
@@ -155,7 +175,9 @@ pip install -e ".[dev,local]"
 # dev adds: pytest, pytest-asyncio, httpx
 # local adds: torch, transformers, accelerate
 
-# Copy and fill in API keys (only needed for cloud clients from main branch)
+# Copy and fill in HPC paths (HF_HOME, MODEL_ROOT, etc.) — this repo has no
+# cloud API clients, so there are no API keys to set here. Never put an HF
+# token in .env; authenticate interactively instead (see Kelvin2 section).
 cp .env.example .env
 
 # Confirm the pipeline works end-to-end without any model weights
@@ -252,14 +274,13 @@ sbatch --export=CONFIG=config/qwen7b_arc_expensive.yaml  slurm/05_run_config.sh
 - Do not put HF tokens in `.env` — use `hf auth login` interactively on the login node.
 - If Kelvin2 has local emergency edits that conflict with upstream fixes: `git reset --hard` then `git pull`.
 
-**Future larger models:**
+**Model scale ladder — current resource allocations:**
 
 | Model size | Partition | GRES | Notes |
 |---|---|---|---|
-| 7B | `k2-gpu-a100mig` | `gpu:a100mig_3g.40gb:1` | Current target |
-| 32B | `k2-gpu-a100` | `gpu:a100:1` | Full 80GB A100 |
-| 72B / H100 | `k2-gpu-h100` | `gpu:h100:1` | H100 for larger models |
-| 32B+ quantized | `k2-gpu-a100` | `gpu:a100:1` | May need multi-GPU or 4-bit quant |
+| 7B / 8B | `k2-gpu-a100mig` | `gpu:3g.40gb:1` | Fits comfortably in one A100 MIG slice |
+| 32B | `k2-gpu-a100` | `gpu:a100:1` | One full 80GB A100 |
+| 70B / 72B | `k2-gpu-a100` | `gpu:a100:2` | Two full A100s (device_map="auto" splits the model); no H100 partition has been needed in practice |
 
 Verify partition and GRES names with `sinfo` on the login node before submitting — names above reflect current Kelvin2 config but may change.
 
@@ -320,7 +341,7 @@ PYTHONPATH=src python scripts/aggregate_results.py <run_id> --cross-benchmark
 **Checkpoint and cache behaviour:**
 Checkpoints are written to `checkpoints/` every `checkpoint_every_n` questions. On a resumed run (`--run-id <id> --yes`), completed question IDs are skipped automatically. Checkpoints are deleted after each job completes successfully; if a job is interrupted mid-write, the `.tmp` file is left behind and the last clean checkpoint is used on next start.
 
-The disk cache in `.cache/responses/` is only used by the cloud API clients (`CachingClientWrapper` in `infra/cache.py`). Local HF backends do not use it.
+This repo has no response cache — `cache_dir` appears in the config path schema for compatibility with the shared config loader, but nothing reads or writes it here. (The cloud API clients and their disk cache live only in the companion `two-stage-prompting` repo.)
 
 **PriDe calibration sidecar:**
 After calibration, `PriDeRunner` writes `runs/<run_id>/pride_calibration__<model>__<benchmark>.json`. On rerun, if the sidecar exists and its calibration question IDs and seed match, calibration is skipped. If the run CSV is deleted and you need to rerun PriDe from scratch, also delete the matching sidecar.
@@ -329,16 +350,18 @@ After calibration, `PriDeRunner` writes `runs/<run_id>/pride_calibration__<model
 The model key in `config.yaml` (the dict key under `models:`) must exactly match the `model_name` column written to run CSVs, which must match entries in `MODEL_ORDER` in `evaluate_run.py` and `aggregate_results.py`. A mismatch silently drops that model from evaluation output. `Qwen/Qwen2.5-7B-Instruct` and `Qwen/Qwen2.5-7B-Instruct-Turbo` are distinct keys.
 
 **`evaluate_run.py` `MODEL_ORDER`:**
-Currently includes cloud model names from the main branch study alongside local model names. Rows for models not in `MODEL_ORDER` are silently excluded from evaluation tables. Update `MODEL_ORDER` in both `evaluate_run.py` and `aggregate_results.py` when adding new models.
+Currently includes cloud model names from the companion repo's study alongside local model names. Rows for models not in `MODEL_ORDER` are silently excluded from evaluation tables. Update `MODEL_ORDER` in both `evaluate_run.py` and `aggregate_results.py` when adding new models.
 
 ---
 
 ## Prior work
 
-The `main` branch contains the two-stage prompting study:
+The companion repository `two-stage-prompting-paper` contains the prior study:
 *Two-Stage Prompting Does Not Mitigate MCQ Positional Bias in LLMs*, Karl Hanna, 2026.
 
-The current branch (`model-generalization`) extends that infrastructure to local open-source models and a scale-generalisation design.
+This repository (`model-generalization-paper`, a separate repo with its own
+single `main` branch — not a branch of the prior study) extends that
+infrastructure to local open-source models and a scale-generalisation design.
 
 ---
 
