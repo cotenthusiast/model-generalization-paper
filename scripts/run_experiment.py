@@ -29,6 +29,7 @@ from modelgen.runners.abcd import ABCDRunner
 from modelgen.runners.additional_option import AdditionalOptionRunner
 from modelgen.runners.calibration import AnswerCalibrationRunner
 from modelgen.runners.direct_mcq import DirectMCQRunner
+from modelgen.runners.independent_hypothesis import IndependentHypothesisRunner
 from modelgen.runners.permutation import PermutationRunner
 from modelgen.runners.pride import PriDeRunner
 from modelgen.runners.text_extraction import TextExtractionRunner
@@ -56,6 +57,7 @@ _METHOD_TO_RUNNER = {
     "additional_option": AdditionalOptionRunner,
     "text_extraction": TextExtractionRunner,
     "abcd": ABCDRunner,
+    "independent_hypothesis": IndependentHypothesisRunner,
 }
 
 # Backend calls per question for each method (used for preflight estimates).
@@ -69,6 +71,7 @@ _CALLS_PER_QUESTION = {
     "additional_option": 1,
     "text_extraction": 1,      # stage 1 only; stage 2 is deterministic similarity matching
     "abcd": 1,                 # stage 1 only; stage 2 is deterministic similarity matching
+    "independent_hypothesis": 4,  # 1 independent generate() call per option (usually 4)
 }
 
 # Maps (benchmark, split) to the artifact_group subdirectory used by read_split_ids.

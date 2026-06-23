@@ -23,7 +23,7 @@ run:
 
   jobs:
     - model: dummy-model
-      methods: [baseline, two_prompt, cyclic, pride, calibration, additional_option, text_extraction, abcd]
+      methods: [baseline, two_prompt, cyclic, pride, calibration, additional_option, text_extraction, abcd, independent_hypothesis]
       benchmark: mmlu
       split: robustness
 

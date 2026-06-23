@@ -6,6 +6,7 @@ from modelgen.pipeline.prompt_builder import (
     build_abcd_prompt,
     build_direct_mcq_prompt,
     build_free_text_prompt,
+    build_independent_hypothesis_prompt,
     build_option_matching_prompt,
     build_text_extraction_prompt,
     load_prompt_templates,
@@ -70,6 +71,29 @@ class TestBuildOptionMatchingPrompt:
         assert prompt.index("B. two") < prompt.index("C. three")
         assert prompt.index("C. three") < prompt.index("D. four")
         assert free_response in prompt
+
+
+class TestBuildIndependentHypothesisPrompt:
+    """Tests for build_independent_hypothesis_prompt."""
+
+    def test_includes_question_and_single_option_as_hypothesis(self):
+        question = "Which number has one factor?"
+        option_text = "one"
+
+        prompt = build_independent_hypothesis_prompt(
+            _TEMPLATES["independent_hypothesis"], question, option_text
+        )
+
+        assert question in prompt
+        assert "Hypothesis: The correct answer is one." in prompt
+        assert "<score>X</score>" in prompt
+
+    def test_excludes_other_options(self):
+        prompt = build_independent_hypothesis_prompt(
+            _TEMPLATES["independent_hypothesis"], "Q", "two"
+        )
+        assert "A." not in prompt
+        assert "B." not in prompt
 
 
 class TestMissingOptionOmitted:
